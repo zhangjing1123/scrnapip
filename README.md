@@ -4,7 +4,7 @@ A Systematic and Dynamic Pipeline for Single-Cell RNA Sequencing Analysis
 
 **Single cell biological information analysis process**
 
-##### Haplox (2023/02/23)
+##### Haplox (2023/02/27)
 
 ### Introduction
 
@@ -14,29 +14,25 @@ The purpose of this tool is connect the analysis of single-cell data into a comp
 
 ## A. Environment set up
 
-### 1. Download Docker images
+### 1. Required software and environment
 
 ```bash
-wget <http://scrnaworkflow.tar>
+#Download fastp
+conda install -c bioconda fastp
+#Download and decompress cellranger
+wget -O cellranger-7.1.0.tar.gz "https://cf.10xgenomics.com/releases/cell-exp/cellranger-7.1.0.tar.gz?Expires=1677511262&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9jZi4xMHhnZW5vbWljcy5jb20vcmVsZWFzZXMvY2VsbC1leHAvY2VsbHJhbmdlci03LjEuMC50YXIuZ3oiLCJDb25kaXRpb24iOnsiRGF0ZUxlc3NUaGFuIjp7IkFXUzpFcG9jaFRpbWUiOjE2Nzc1MTEyNjJ9fX1dfQ__&Signature=iP4gsUveuUB0-WDVjtfGo8zqxW9vAa~RX9WLeHwjeH9~PsV3YAPsibucKGUvd9LbRhLZgFIkH9YbdMt0lTFXOL77DuLASDEJxdsYw1a1JbGGfr5ovy-xMDyWhsVuhz-zd~hmjRmTDvck0FwefwZWyUQXNGhcpBn-CVJQrAa5RMAId91NmFk8lKA1-ZBPat-fJ0Ivyq3gnXjkHpsNb3oJw2lgUDtTLVDtnuQo~LRuFLz026RaKgTAhI1YQfw7ug7N4shTtbxo275AWIi870fpizNd-K6npOrGyDAkuB87x8AigJBIpfs2Loi33g9hRXxgs4irjOov5C7c-F3wV7iTjA__&Key-Pair-Id=APKAI7S6A5RYOXBWRPDA"
+tar -xzvf cellranger-7.1.0.tar.gz
 ```
 
-Download docker images from the docker mirror site to solve environment configuration.
+### 2. Install R packages
 
-### 2. Load the image file into the docker image repository
-
-```bash
-docker load --input scrnaworkflow.tar
+```R
+#Enter the R environment and install the required R packages,If this fails, try to install through conda
+install.packages(c('rmarkdown', 'BiocManager','stringi','circlize','logging','optparse','colourpicker', 'formattable', 'msigdbr','readr', 'shinydashboard','shinyWidgets','DT','configr','Seurat'))
+BiocManager::install(c('SingleR','monocle','biomaRt','ggtree','GSVA','qvalue','clusterProfiler','org.Hs.eg.db','org.Mm.eg.db','ReactomePA'))
 ```
 
-Please confirm in advance that there is no mirror named scrnaworkflow.
 
-### 3. Use this image to create a container
-
-```bash
-docker run -it --name scworkflow -v <local data path>:/usr/data scrna_workflow bash
-```
-
-Start and run the analysis in the container,parameter "-v" can mount the local path into the container to get the fastq files and configuration file.
 
 ## B. Start Workflow
 
@@ -44,30 +40,80 @@ Start and run the analysis in the container,parameter "-v" can mount the local p
 
 All input files and parameters are set in this configuration file. The main Settings that need to be changed are the following：
 ``` bash
-#####[fastp_cellrange]:RAW data path. The pair end data must be split into two files。
+#####[fastp_cellrange]:RAW data path. The pair end data must be split into two files
 S1.R1=["/usr/data/SAMPLE1_S1_L001_R1_001.fastq.gz"]
 S1.R2=["/usr/data/SAMPLE1_S1_L001_R2_001.fastq.gz"]
 #If a sample has more than one raw data,you can merge them before or add path split by ",":
 S1.R1=["/usr/data/SAMPLE1.1_S1_L001_R1_001.fastq.gz","/usr/data/SAMPLE1.2_S1_L001_R1_001.fastq.gz"]
 S1.R2=["/usr/data/SAMPLE1.1_S1_L001_R2_001.fastq.gz","/usr/data/SAMPLE1.2_S1_L001_R2_001.fastq.gz"]
-#####[indata]:cellranger matrix file path.
+
+#####[indata]:cellranger matrix file path
 S1="/usr/workout/02.cellranger/S1/outs/filtered_feature_bc_matrix"
-#####[outpath]:output path.
+
+#####[outpath]:output path
 outpath="/usr/workout"
+
+#####[tempdata]rds file output path
+tempdata="workout"
+
 #####[run]:The analysis that needs to be done should set to true,for example:
-fastp=true
+fastp=true#run fastp
+
 #####[fastp]:Configure the fastp path and parameters
+fastppath="/usr/fastp"
+longr=26#R1 length after trim
+ncode=5#The maximum number of N-bases
+
 #####[cellrangle]:Configure the cellranger path and parameters
 dockerusr="1025:1025"#user id
 dir="/user/name"#The folder which docker mount
 ref="/user/refdata-gex-GRCh38-2020-A"#Reference genome path
-cellrangerpath="/usr/cellranger-6.1.2/cellranger"#software path of cellranger 
+cellrangerpath="/usr/cellranger-6.1.2/cellranger"#software path of cellranger
+expectcell=10000#expect cell number
+localcores=32#Number of threads
+localmem=64#Memory size
+include_introns="false"#Whether to analyze introns
+
 #####[step1]:
 nFeature_RNA=[200,5000]#The cells were filtered by feature, keeping cells that feature between 200 and 5,000 
 percent_mt=[0,10]#The cells were filtered by percent of mitochondria, keeping cells that percent of mitochondria less than 10%
+mttype="MT"#Mitochondrial type, MT for humans and mt for mice
+
+#####[step2]:
+kfilter=200#Minimum number of cells per sample
+normethod="SCT"#The merge method, which uses SCT by default, can also use vst to simply group samples together
+nFeature=3000#Genes for subsequent analysis
+
 #####[step3]:
+heatmapnumber=9#Number of heatmaps drawn for pca
+elbowdims=100#The number of PCS shown in the elbow diagram
 dims=30#Select the top 30 PCs for dimensionality reduction
+reduction="umap"#tSNE or UMAP
+clustercell=true#Whether you need to cluster cells
 resolution=0.6#Set the resolution when clustering
+algorithm=1#Cluster modular optimization algorithm (1 = original Louvain algorithm; 2 = Louvain algorithm with multilevel refinement; 3 = SLM algorithm
+singler="/singleRdata/test.rds"#singleR database position
+
+#####[step4]:
+clustermarkers=true#Whether marker genes of each cluster need to be found
+min_pct=0.25#The minimum proportion of marker gene in the number of cells is 0.25 by default
+findmarkers_testuse="wilcox"#The method of finding marker gene
+difcluster.test.a=[0,1]#Find Differential gene.If you want to find differences between samples,change cluster to ident
+difcluster.test.b=[5,6]#Test indicates the group name,a for case and b for control
+difcluster.test.testuse="wilcox"#Inspection method
+
+#####[step5]:
+meanexpression=0.5#Select the appropriate gene to mark the state, intercept the condition, default is 0.5
+genenum=50#Number of gene in differential analysis heat map
+numclusters=4#The number of clusters in a cluster
+pointid=1#The branching points used in BEAM analysis
+BEAMnumclusters=4#Number of clusters in heat map clustering
+BEAMgn=50#BEAM analyzes heat map gene count
+BEAMgenelist=["S100A12", "ALOX5AP", "PAD14", "NRG1", "MCEMP1", "THBS1","testgene"]#BEAM analyzes specific gene names
+
+#####[step6]:
+circosbin="/bin/get_exp.r"#Extraction expression
+circos_perl_bin="/bin/circos_plot.pl"#Plot circos
 ```
 
 ### 2. Filtered data by fastp and cellranger
@@ -100,7 +146,7 @@ Sequence statistics and reads filtering result files were performed on the origi
 
 Quality control summary statistics by fastp.
 
-### 2. cellranger
+### 2. Cellranger
 
 Cellranger results after mapping and quantitative.
 ``` bash
@@ -224,7 +270,7 @@ To perform pseudotime analysis of the cells,we used monocle2  to select high dis
 
 Cell trajectory plot drawed by monocle.
 
-### 7. Visualization of scRNA-seq result
+### 7. Cerebro
 
 Cerebro(cell report browser), which allows users to interactively visualize various parts of single cell transcriptomics data without requiring bioinformatic expertise.Cerebro can draw various graphs to display single cell results like umap/tsne for 2D/3D,bar plot,violin plot,cluster tree etc.
 
