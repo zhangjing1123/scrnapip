@@ -91,6 +91,7 @@ findmarkers_testuse="wilcox"#The method of finding marker gene
 difcluster.test.a=[0,1]#Find Differential gene.If you want to find differences between samples,change cluster to ident
 difcluster.test.b=[5,6]#Test indicates the group name,a for case and b for control
 difcluster.test.testuse="wilcox"#Inspection method
+ClusterProfiler=["true","Rscript","/home/bin/clusterProfiler.R","-a true -s org.Hs.eg.db,hsa,human -g 6 -t SYMBOL -d KEGG,BioCyc,PID,PANTHER,BIOCARTA -C 0.05"]#Enrichment analysis of difference analysis results.-a:Whether to use all background genes;-s:species;-g:The column of the gene in the file;-t:gene name type(SYMBOL,ENTREZID);-d:database name
 
 #####[step5]:
 meanexpression=0.5#Select the appropriate gene to mark the state, intercept the condition, default is 0.5
@@ -102,21 +103,21 @@ BEAMgn=50#BEAM analyzes heat map gene count
 BEAMgenelist=["S100A12", "ALOX5AP", "PAD14", "NRG1", "MCEMP1", "THBS1","testgene"]#BEAM analyzes specific gene names
 
 #####[step6]:
-circosbin="/bin/get_exp.r"#Extraction expression
-circos_perl_bin="/bin/circos_plot.pl"#Plot circos
+circosbin="/home/bin/get_exp.r"#Extraction expression
+circos_perl_bin="/home/bin/circos_plot.pl"#Plot circos
 
 #####[step7]:
-copykat_bin="/bin/copykat_v4.r"#Identify tumor cells
+copykat_bin="/home/bin/copykat_v4.r"#Identify tumor cells
 
 #####[step8]:
-cytoTRACE_bin="/bin/cytotrace_230508.R"#Developmental potential analysis
+cytoTRACE_bin="/home/bin/cytotrace_230508.R"#Developmental potential analysis
 
 #####[step9]:
-genomicinstably_bin="/bin/genomicinstably.R"Genomic instability analysist
+genomicinstably_bin="/home/bin/genomicinstably.R"Genomic instability analysist
 org="human"#species
 
 #####[step11]:
-ClusterProfiler=["true","Rscript","/bin/clusterProfiler.test.R","-a true -s org.Hs.eg.db,hsa,human -g 1 -t SYMBOL -d KEGG,BioCyc,PID,PANTHER,BIOCARTA -C 0.05"]#-a:Whether to use all background genes;-s:species;-g:The column of the gene in the file;-t:gene name type(SYMBOL,ENTREZID);-d:database name
+ClusterProfiler=["true","Rscript","/home/bin/clusterProfiler.R","-a true -s org.Hs.eg.db,hsa,human -g 1 -t SYMBOL -d KEGG,BioCyc,PID,PANTHER,BIOCARTA -C 0.05"]#Enrichment analysis of marker gene
 ```
 
 ### 2. Filtered data by fastp and cellranger
