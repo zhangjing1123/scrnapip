@@ -18,7 +18,7 @@ docker pull zhangjing12/scrnapip
 ### 2. Use docker
 
 ```bash
-docker run -d -p 1921:8787 -p 1882:3838 -e PASSWORD=yourpassword -e USERID=youruserid -e GROUPID=yourgroupid -v /yourdatapath:/yourdatapath zhangjing12/scrnapip
+docker run -d -p 1921:8787 -p 1882:3838 -e PASSWORD=yourpassword -e USERID=youruserid -e GROUPID=yourgroupid -v /yourdatapath:/dockerpath zhangjing12/scrnapip
 ```
 
 The image is created based on Rocker (https://rocker-project.org/images/versioned/rstudio.html). You can use the above command to access rstudio through port 8787, which is more convenient for users to use the process. The userid and groupid can be queried through the id command. For the port number, please confirm whether the corresponding port is open.
@@ -124,7 +124,7 @@ ClusterProfiler=["true","Rscript","/bin/clusterProfiler.test.R","-a true -s org.
 This R script is used for data filtering and comparison quantitative analysis, and relevant parameters are set in the configuration file config.ini.
 
 ```bash
-Rscript fastp_cellranger.r -i config.ini
+Rscript /home/bin/fastp_cellranger.r -i config.ini
 ```
 
 ### 3. Seurat analysis
@@ -132,7 +132,7 @@ Rscript fastp_cellranger.r -i config.ini
 This R script is used for all advanced analyses, and relevant parameters are set in the configuration file config.ini.
 
 ```bash
-Rscript singlecell.r -i config.ini
+Rscript /home/bin/singlecell.r -i config.ini
 ```
 
 ## C. Result
