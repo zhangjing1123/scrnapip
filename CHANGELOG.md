@@ -9,5 +9,4 @@
 - Documented the workflow change from Cerebro export to Loupe Browser `.cloupe` export via `loupeR`.
 - Documented the replacement of the old CytoTRACE step with CytoTRACE2 outputs and configuration.
 - Added `docker/data/config_Example.ini` as a runnable configuration template.
-- Confirmed the bundled `fastp` binary is unchanged from the maintained pipeline and remains fastp 0.23.2.
 - Synced additional downstream fixes: DoubletFinder runs per sample before integration, Seurat v5 layer joins/fallbacks are used where needed, Monocle 2 compatibility patches are included, CellChat optional `projectData()` handling is guarded, and clusterProfiler database lookup is stabilized.
