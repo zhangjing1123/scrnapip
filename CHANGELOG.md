@@ -6,4 +6,6 @@
 - Updated the fastp/Cell Ranger workflow for Cell Ranger 10 by adding `create_bam` and `include_introns` configuration support.
 - Replaced Cell Ranger `outs` symlink staging with explicit copies of filtered matrix MEX, filtered matrix HDF5, web summary HTML, and metrics summary CSV.
 - Synced downstream single-cell analysis compatibility updates, including Seurat v5-related fixes and refreshed helper scripts.
+- Documented the workflow change from Cerebro export to Loupe Browser `.cloupe` export via `loupeR`.
+- Documented the replacement of the old CytoTRACE step with CytoTRACE2 outputs and configuration.
 - Added `docker/data/config_Example.ini` as a runnable configuration template.

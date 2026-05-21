@@ -119,7 +119,9 @@ circos_perl_bin="/home/bin/circos_plot.pl"#Plot circos
 copykat_bin="/home/bin/copykat_v4.r"#Identify tumor cells
 
 #####[step8]:
-cytoTRACE_bin="/home/bin/cytotrace_230508.R"#Developmental potential analysis
+cytoTRACE_bin="/home/bin/cytotrace2_20260516.R"#CytoTRACE2 developmental potential analysis
+species="human"#human or mouse
+ncore=8#Number of CPU cores used by CytoTRACE2
 
 #####[step9]:
 genomicinstably_bin="/home/bin/genomicinstably.R"Genomic instability analysist
@@ -315,11 +317,14 @@ Cell trajectory plot drawed by monocle.
 
 
 
-### 7. Cerebro
+### 7. Loupe Browser
 
-Cerebro(cell report browser), which allows users to interactively visualize various parts of single cell transcriptomics data without requiring bioinformatic expertise.Cerebro can draw various graphs to display single cell results like umap/tsne for 2D/3D,bar plot,violin plot,cluster tree etc.
+The Cerebro export step has been replaced by Loupe Browser export. Step 6 now uses 10x Genomics `loupeR` to generate a `.cloupe` file from the Seurat object, including available metadata such as `orig.ident` and `seurat_clusters`. Before running this step, accept the 10x Genomics EULA by running `loupeR::setup()` once, or set `AUTO_ACCEPT_EULA=true` in the runtime environment.
 
-![cerebro](readme_files/cerebro.png)
+```bash
+── 07.LoupeBrowser/
+     └── <cloupe_name>.cloupe             <- Loupe Browser file for interactive inspection
+```
 
 ### 8. ClusterProfiler
 
@@ -422,22 +427,21 @@ The genomic Instability score density plot.
 
 <img src="readme_files/cellchat.png" title="" alt="cellchat" data-align="center">
 
-### 12. CytoTRACE
+### 12. CytoTRACE2
 
-CytoTRACE (Cellular (Cyto) Trajectory Reconstruction Analysis using gene Counts and Expression) is a computational method that predicts the differentiation state of cells from single-cell RNA-sequencing data. CytoTRACE leverages a simple, yet robust, determinant of developmental potential—the number of detectably expressed genes per cell, or gene counts. CytoTRACE have been validated on ~150K single-cell transcriptomes spanning 315 cell phenotypes, 52 lineages, 14 tissue types, 9 scRNA-seq platforms, and 5 species.
+The old CytoTRACE workflow has been replaced by CytoTRACE2. Step 8 runs `cytotrace2_20260516.R`, adds CytoTRACE2 scores and potency annotations back to the Seurat object, and writes tables, RDS files, and UMAP/boxplot visualizations.
 
 ```bash
-── 10.CytoTRACE/ 
-       ├── <prefix>.CytoTRACE.boxplot_raw.pdf/png     <- Boxplot of cytotrace scores by cluster 
-       ├── <prefix>.CytoTRACE.boxplot_type.pdf/png    <- Boxplot of cytotrace scores by cell type 
-       ├── <prefix>.cytovalue.FeaturePlot.pdf/png     <- Umap plot characterized by cytotrace scores 
-       ├── <prefix>CytoGenes.pdf                      <- Genes that most correlated with cytotrace score 
-       └── <prefix>.CytoTRACE.table.txt               <- Table containing cytotrace scores and cell names
+── 09.CytoTRACE2/
+       ├── CytoTRACE2.table.txt                         <- CytoTRACE2 scores and annotations per cell
+       ├── CytoTRACE2.result.rds                        <- CytoTRACE2 result table as RDS
+       ├── CytoTRACE2.seurat.rds                        <- Seurat object with CytoTRACE2 metadata
+       ├── CytoTRACE2.cluster_table.txt                 <- Cluster-level CytoTRACE2 summary table
+       ├── CytoTRACE2.score.FeaturePlot.pdf/png         <- UMAP colored by CytoTRACE2 score
+       ├── CytoTRACE2.relative.FeaturePlot.pdf/png      <- UMAP colored by CytoTRACE2 relative score
+       ├── CytoTRACE2.potency.DimPlot.pdf/png           <- UMAP grouped by CytoTRACE2 potency class
+       └── CytoTRACE2.score.boxplot_cluster.pdf/png     <- CytoTRACE2 score distribution by cluster
 ```
-
-![cytotrace](readme_files/cytotest.CytoTRACE.boxplot_raw.png)
-
-Boxplots ordered by median cytotrace score.
 
 
 
@@ -467,7 +471,7 @@ Boxplots ordered by median cytotrace score.
 
 [12]Aran D, Looney AP, Liu L, et al. Reference-based analysis of lung single-cell sequencing reveals a transitional profibrotic macrophage. Nat Immunol. 2019;20(2):163-172.
 
-[13]Hillje R, Pelicci PG, Luzi L. Cerebro: interactive visualization of scRNA-seq data. Bioinformatics. 2020;36(7):2311-2313.
+[13]10x Genomics. Loupe Browser and loupeR documentation.
 
 [14]Gu Z, Gu L, Eils R, Schlesner M, Brors B. circlize Implements and enhances circular visualization in R. Bioinformatics. 2014;30(19):2811-2812.
 
@@ -475,7 +479,7 @@ Boxplots ordered by median cytotrace score.
 
 [16]Gao R, Bai S, Henderson YC, et al. Delineating copy number and clonal substructure in human tumors from single-cell transcriptomes. _Nat Biotechnol_. 2021;39(5):599-608. 
 
-[17]Gulati GS, Sikandar SS, Wesche DJ, et al. Single-cell transcriptional diversity is a hallmark of developmental potential. _Science_. 2020;367(6476):405-411.
+[17]CytoTRACE2 package and documentation for developmental potential analysis.
 
 [18]Jin S, Guerrero-Juarez CF, Zhang L, et al. Inference and analysis of cell-cell communication using CellChat. _Nat Commun_. 2021;12(1):1088. Published 2021 Feb 17.
 
@@ -483,7 +487,7 @@ Boxplots ordered by median cytotrace score.
 
 [20]Gao R, Bai S, Henderson YC, et al. Delineating copy number and clonal substructure in human tumors from single-cell transcriptomes. _Nat Biotechnol_. 2021;39(5):599-608.
 
-[21]Gulati GS, Sikandar SS, Wesche DJ, et al. Single-cell transcriptional diversity is a hallmark of developmental potential. _Science_. 2020;367(6476):405-411.
+[21]CytoTRACE2 package and documentation for developmental potential analysis.
 
 [22]Yu G, Wang LG, Han Y, He QY. clusterProfiler: an R package for comparing biological themes among gene clusters. OMICS. 2012;16(5):284-287.
 
