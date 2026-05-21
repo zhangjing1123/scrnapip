@@ -45,7 +45,29 @@ if(length(mycol)>=3){
 print("Start")
 
 raw <- readRDS(rdsfile)
+if ("RNA" %in% names(raw@assays) && inherits(raw[["RNA"]], "Assay5") && exists("JoinLayers")) {
+  raw <- JoinLayers(raw, assay = "RNA")
+}
 samplenum <- length(unique(raw@meta.data$orig.ident))
+
+get_rna_counts <- function(rds, cells) {
+  counts <- tryCatch(
+    GetAssayData(rds, assay = "RNA", layer = "counts"),
+    error = function(e) {
+      tryCatch(
+        GetAssayData(rds, assay = "RNA", slot = "counts"),
+        error = function(e2) {
+          stop("Cannot read RNA counts from Seurat object: ", conditionMessage(e), "; ", conditionMessage(e2))
+        }
+      )
+    }
+  )
+  cells <- intersect(colnames(counts), cells)
+  if (length(cells) == 0) {
+    stop("No cells from this sample were found in RNA counts")
+  }
+  as.matrix(counts[, cells, drop = FALSE])
+}
 
 copykat.analysis <-function(rds,output,sampleid,ngene_chr,subn,species,ncore){
   sample <- unique(rds@meta.data$orig.ident)[sampleid]
@@ -56,7 +78,7 @@ copykat.analysis <-function(rds,output,sampleid,ngene_chr,subn,species,ncore){
   setwd(outpath)
   
   realcell <- rownames(rds@meta.data[rds@meta.data$orig.ident==sample,])
-  exp.rawdata <- as.matrix(rds@assays$RNA@counts[,colnames(rds@assays$RNA@counts) %in% realcell])
+  exp.rawdata <- get_rna_counts(rds, realcell)
   write.table(exp.rawdata, file=paste0(sample,"_rawdata.txt"), sep="\t", quote = FALSE, row.names = TRUE)
   
   #copykat分析

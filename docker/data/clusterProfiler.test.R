@@ -42,6 +42,21 @@ command=matrix(c(
 "bggene","b",1,"character",
 "help","h",0,"logical"),byrow=T,ncol=4)
 args=getopt(command)
+script_path <- tryCatch(normalizePath(sys.frame(1)$ofile), error = function(e) NA_character_)
+if (is.na(script_path)) {
+    cmd_args <- commandArgs(trailingOnly = FALSE)
+    file_arg <- grep("^--file=", cmd_args, value = TRUE)
+    if (length(file_arg) > 0) {
+        script_path <- normalizePath(sub("^--file=", "", file_arg[1]))
+    } else {
+        script_path <- normalizePath("clusterProfiler.R")
+    }
+}
+script_dir <- dirname(script_path)
+clusterprofiler_db_dir <- file.path(script_dir, "singleRdata", "singleRdata", "clusterprofiler")
+if (!dir.exists(clusterprofiler_db_dir)) {
+    clusterprofiler_db_dir <- "/home/bin/singleRdata/singleRdata/clusterprofiler"
+}
 if (!is.null(args$help) || is.null(args$file) || is.null(args$name)) {
     cat(paste(getopt(command, usage = T), "\n"))
     q()
@@ -106,6 +121,8 @@ if(args$idtype=="ENTREZID"){
     print("****check id")
     print(head(bi,3))
 }
+
+bi$ENTREZID <- as.character(bi$ENTREZID)
 
 ## Read background gene data
 if(args$bgall=="false" && !is.null(args$bggene)){
@@ -375,11 +392,18 @@ if(!is.null(bi) && nrow(bi)>1){
 db_ava <- c("KEGG","BIOCARTA","BioCyc","PANTHER","PID","Reactome")
 for (db in db_type){
 if(db %in% db_ava){ #added by wwf
-    kegg_db<-read.table(paste("/home/dataa/singleRdata/singleRdata/clusterprofiler/",db,"_hsa_entrezID.xls",sep=""),header=T,sep="\t")
+    db_file <- file.path(clusterprofiler_db_dir, paste0(db, "_hsa_entrezID.xls"))
+    if (!file.exists(db_file)) {
+        stop("Cannot find clusterProfiler database file: ", db_file)
+    }
+    kegg_db<-read.table(db_file,header=T,sep="\t")
     print("*****database check")
     print(head(kegg_db,3))
     path2gene<-kegg_db[,c(1,2)]
     path2name<-kegg_db[,c(1,3)]
+    path2gene[,1] <- as.character(path2gene[,1])
+    path2gene[,2] <- as.character(path2gene[,2])
+    path2name[,1] <- as.character(path2name[,1])
     n=0
     for(i in 1:nrow(bi)){
         if(bi$ENTREZID[i] %in% path2gene$GENE){

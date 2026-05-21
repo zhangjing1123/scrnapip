@@ -30,7 +30,14 @@ if(!is.null(args$celltype)){
   type = read.table(args$celltype,sep="\t",header=T,comment.char = "")
   colnames(type)=c("Cell","type")
 }else{
-  type = data.frame(Cell=rownames(seuset@meta.data),type=seuset@meta.data$seurat_cluster)
+  cluster_col <- if ("seurat_clusters" %in% colnames(seuset@meta.data)) {
+    "seurat_clusters"
+  } else if ("seurat_cluster" %in% colnames(seuset@meta.data)) {
+    "seurat_cluster"
+  } else {
+    stop("Cannot find seurat_clusters or seurat_cluster in Seurat metadata")
+  }
+  type = data.frame(Cell=rownames(seuset@meta.data),type=seuset@meta.data[[cluster_col]])
 }
 sample = data.frame(Cell=rownames(seuset@meta.data),sample=seuset@meta.data$orig.ident)
 celllist = merge(type,sample,by="Cell")
@@ -39,7 +46,13 @@ celllist = celllist[,c("Cell","type_sample")]
 realcluster = celllist[is.finite(match(celllist[,1],colnames(seuset))),]
 seuset = subset(seuset,cells=as.character(realcluster[,1]))
 DefaultAssay(seuset) = "RNA"
-data = GetAssayData(seuset, slot = "data")
+if (exists("JoinLayers")) {
+  seuset <- tryCatch(JoinLayers(seuset, assay = "RNA"), error = function(e) seuset)
+}
+data <- tryCatch(
+  GetAssayData(seuset, assay = "RNA", layer = "data"),
+  error = function(e) GetAssayData(seuset, assay = "RNA", slot = "data")
+)
 
 if(!is.null(args$type2gene)){
   seuset = SetIdent(object = seuset, cells= as.character(type[,1]), as.character(type[,2]))
@@ -57,7 +70,7 @@ if(!is.null(args$type2gene)){
   for(i in unique(allmarkers$cluster)){
     tmp_marker = allmarkers[allmarkers$cluster==i,]
     for(j in 1:nrow(tmp_marker)){
-      if(!tmp_marker$Gene[j]%in%genelist && tmp_marker$Gene[j]%in%rownames(seuset@assays$RNA@data)){
+      if(!tmp_marker$Gene[j]%in%genelist && tmp_marker$Gene[j]%in%rownames(data)){
         genelist = c(genelist,tmp_marker$Gene[j])
         type2gene=rbind(type2gene,data.frame(Type=i,Gene=tmp_marker$Gene[j]))
         print(paste0("cluster",i))

@@ -89,8 +89,11 @@ syscomd<-function(commada,savef="",runl=T){
     cat(paste0(commada,"\n"),file=savef,append = T)
   }
   if(runl==T){
-    loginfo(commanda)
-    system(commanda)
+    loginfo(commada)
+    status <- system(commada)
+    if (!identical(status, 0L)) {
+      stop(sprintf("Command failed with exit status %s: %s", status, commada))
+    }
   }
 }
 
@@ -98,9 +101,6 @@ syscomd<-function(commada,savef="",runl=T){
 option_list=list(make_option(c("-i","--infile"),  action="store", help='The input file.'),
                  make_option(c("-p","--path"),  action="store", help='The input file.',default = ""))
 opt<-parse_args(OptionParser(usage="%prog [options] file\n",option_list=option_list))
-#opt$infile="/thinker/nfs4/public/liyq/bin/singlecell/testdata2/test.ini"
-#opt$infile="/haplox/haprs/liyq/singlecell/test/mmu10/test/cofige.hapyun.ini"
-#opt$infile="/data/haplox/users/liyq/singlecell/deadline/confige.ini"   shielded by zhangdx
 csc=parseTOML(opt$infile)
 outdir=csc$outpath$outpath
 
@@ -112,11 +112,11 @@ if(csc$outpath$outpath %>% str_detect("^/")){
     loginfo("outfile in %s",outdir)
     
   }
-
 numsap=length(csc$indata)
 dir.create(outdir,recursive = T)
 dir.create(paste(outdir,"temp",sep="/"))
 dir.create(paste(outdir,"shell",sep="/"))
+setwd(outdir)
 
 outtemp=paste(outdir,"temp","",sep="/")
 if(isstep(1)){
@@ -214,6 +214,13 @@ if (isstep(2)){
       listobj <- PrepSCTIntegration(object.list = listobj, anchor.features = pbmc_features)
       pbmc_anchors <- FindIntegrationAnchors(object.list = listobj, normalization.method = "SCT", k.filter = csc$step2$kfilter,anchor.features = pbmc_features,reference = usereflist)
       pbmcall <- IntegrateData(anchorset = pbmc_anchors, normalization.method = "SCT")
+      
+        pbmcall@active.assay="RNA"
+      pbmcall=NormalizeData(pbmcall)
+      pbmcall@active.assay="integrated"
+      
+      
+      
     }else if(csc$step2$normethod=="vst"){
       filternum=NULL
       for (i in 1:length(listobjall)) {
@@ -242,7 +249,9 @@ if (isstep(2)){
     pbmcall <- ScaleData(mergepb, verbose = FALSE)
     
   }
+  
   loginfo("save %s",paste0(outtemp,"step2.RDS"))
+  
   saveRDS(pbmcall,paste0(outtemp,"step2.RDS"))
   loginfo("step2 end")
 }
@@ -253,6 +262,82 @@ if (isstep(3)){
   if (!isstep(2)){
     loginfo("input step2 rds")
     pbmcall=getrds(2)
+  }
+  cscumap=csc$step3$reduction
+  dir.create(paste(outdir,"step3",cscumap,sep="/"), recursive = T)
+  if(csc$step3$doubletfinder){
+    library(DoubletFinder)
+    loginfo("DoubletFinder start before integration and reduction")
+    
+    doubletFinder_one_sample <- function(sample_obj, sample_name) {
+      loginfo("DoubletFinder sample start: %s", sample_name)
+      if(csc$step3$doublesct){
+        seu_kidney <- sample_obj
+        DefaultAssay(seu_kidney) <- "RNA"
+        seu_kidney <- SCTransform(seu_kidney)
+        seu_kidney <- RunPCA(seu_kidney)
+        seu_kidney <- RunUMAP(seu_kidney, dims = 1:10)
+      }else{
+        seu_kidney <- sample_obj
+        DefaultAssay(seu_kidney) <- "RNA"
+        seu_kidney <- NormalizeData(seu_kidney)
+        seu_kidney <- FindVariableFeatures(seu_kidney, selection.method = "vst", nfeatures = 2000)
+        seu_kidney <- ScaleData(seu_kidney)
+        seu_kidney <- RunPCA(seu_kidney)
+        seu_kidney <- RunUMAP(seu_kidney, dims = 1:10)
+      }
+      
+      sweep.res.list_kidney <- paramSweep(seu_kidney, PCs = 1:10, sct = csc$step3$doublesct)
+      sweep.stats_kidney <- summarizeSweep(sweep.res.list_kidney, GT = FALSE)
+      bcmvn_kidney <- find.pK(sweep.stats_kidney)
+      seu_kidney <- FindNeighbors(seu_kidney, dims = 1:10)
+      seu_kidney <- FindClusters(seu_kidney, resolution = csc$step3$resolution)
+      
+      homotypic.prop <- modelHomotypic(seu_kidney$seurat_clusters)
+      nExp_poi <- round(csc$step3$doublerate*nrow(seu_kidney@meta.data))
+      nExp_poi.adj <- round(nExp_poi*(1-homotypic.prop))
+      pK_bcmvn <- bcmvn_kidney$pK[which.max(bcmvn_kidney$BCmetric)] %>% as.character() %>% as.numeric()
+      if(is.na(pK_bcmvn)){
+        pK_bcmvn <- 0.09
+      }
+      
+      seu_kidney <- doubletFinder(seu_kidney, PCs = 1:10, pN = 0.25, pK = pK_bcmvn, nExp = nExp_poi.adj, reuse.pANN = NULL, sct = csc$step3$doublesct)
+      colnames(seu_kidney@meta.data)[ncol(seu_kidney@meta.data)] <- "double"
+      
+      doublesin <- table(seu_kidney$double)
+      title_str <- paste(paste(names(doublesin), doublesin, sep = ": "), collapse = ",  ")
+      doubleplot <- DimPlot(seu_kidney,group.by = "double") + labs(title = paste0(sample_name, " ", title_str))
+      savepdf(paste(outdir,"step3",cscumap,paste0(sample_name,"_plotby_DoubletFinder"),sep="/"),doubleplot,widthle = 10,heightle = 8)
+      write.table(seu_kidney@meta.data,paste(outdir,"step3",cscumap,paste0(sample_name,"_DoubletFinder.txt"),sep="/"),col.names = T,row.names = T,sep = "\t",quote = F)
+      
+      singlet_obj <- subset(seu_kidney,subset = double=="Singlet")
+      loginfo("DoubletFinder sample end: %s singlets=%s total=%s", sample_name, ncol(singlet_obj), ncol(seu_kidney))
+      return(singlet_obj)
+    }
+    
+    sample_objs <- SplitObject(pbmcall, split.by = "orig.ident")
+    singlet_objs <- list()
+    for(sample_name in names(sample_objs)){
+      singlet_objs[[sample_name]] <- doubletFinder_one_sample(sample_objs[[sample_name]], sample_name)
+    }
+    
+    if(length(singlet_objs) == 1){
+      pbmcall <- singlet_objs[[1]]
+    }else{
+      pbmcall <- merge(singlet_objs[[1]], y = singlet_objs[-1], add.cell.ids = names(singlet_objs))
+    }
+    
+    DefaultAssay(pbmcall) <- "RNA"
+    pbmcall <- NormalizeData(pbmcall)
+    pbmcall <- FindVariableFeatures(pbmcall, selection.method = "vst", nfeatures = csc$step2$nFeature)
+    pbmcall <- ScaleData(pbmcall)
+    write.table(pbmcall@meta.data,paste(outdir,"step3",cscumap,"DoubletFinder_singlets_meta.txt",sep="/"),col.names = T,row.names = T,sep = "\t",quote = F)
+    if(file.exists(paste0(outdir,"/Rplots.pdf"))){
+      loginfo(paste0("find Rplots.pdf in ",outdir," ,rm it"))
+      file.remove(paste0(outdir,"/Rplots.pdf"))
+    }
+    loginfo("DoubletFinder end before integration and reduction")
+    
   }
   pbmcall=RunPCA(pbmcall)
   dir.create(paste(outdir,"step3","pca",sep="/"))
@@ -271,8 +356,7 @@ if (isstep(3)){
   bow_plot=ElbowPlot(pbmcall,csc$step3$elbowdims)#    add parameters: csc$step3$elbowdims by zhangdx
   savepdf(paste(outdir,"step3","pca","bowplot",sep="/"),bow_plot)
   
-  cscumap=csc$step3$reduction
-  if(csc$step3$recluster){
+  if(csc$step3$recluster & length(levels(pbmcall$orig.ident))> 1 ){
     library(harmony)
     library(scran)
     library(dplyr)
@@ -313,9 +397,9 @@ if (isstep(3)){
       names(seuset_harmony@reductions)
       seuset_harmony <- RunUMAP(seuset_harmony,dims = 1:pcdims,reduction="harmony",seed.use = 100)
       
-      p=DimPlot(seuset_harmony,reduction = "umap",label = TRUE)
-      ggsave(paste0(outpath,"/UMAP.harmony.png"),p,height = 8,width = 8.5)
-      ggsave(paste0(outpath,"/UMAP.harmony.pdf"),p,height = 8,width = 8.5)
+    #  p=DimPlot(seuset_harmony,reduction = "umap",label = TRUE)
+    #  ggsave(paste0(outpath,"/UMAP.harmony.png"),p,height = 8,width = 8.5)
+    #  ggsave(paste0(outpath,"/UMAP.harmony.pdf"),p,height = 8,width = 8.5)
       p=DimPlot(seuset_harmony,reduction = "umap",group.by = "orig.ident",label=TRUE)+labs(title = "Harmony_orig.ident")
       ggsave(paste0(outpath,"/UMAP.sample_harmony.png"),p,height = 8,width = 8.5)
       ggsave(paste0(outpath,"/UMAP.sample_harmony.pdf"),p,height = 8,width = 8.5)
@@ -341,9 +425,9 @@ if (isstep(3)){
       names(seuset_mnn@reductions)
       seuset_mnn <- RunUMAP(seuset_mnn,reduction="mnn",dims=1:pcdims,seed.use = 100)
       
-      p=DimPlot(seuset_mnn,reduction = "umap",label = TRUE)
-      ggsave(paste0(outpath,"/UMAP.mnn.png"),p,height = 8,width = 8.5)
-      ggsave(paste0(outpath,"/UMAP.mnn.pdf"),p,height = 8,width = 8.5)
+      #p=DimPlot(seuset_mnn,reduction = "umap",label = TRUE)
+     # ggsave(paste0(outpath,"/UMAP.mnn.png"),p,height = 8,width = 8.5)
+     # ggsave(paste0(outpath,"/UMAP.mnn.pdf"),p,height = 8,width = 8.5)
       p=DimPlot(seuset_mnn,reduction = "umap",group.by = "orig.ident",label=TRUE)+labs(title = "MNN_orig.ident")
       ggsave(paste0(outpath,"/UMAP.sample_mnn.png"),p,height = 8,width = 8.5)
       ggsave(paste0(outpath,"/UMAP.sample_mnn.pdf"),p,height = 8,width = 8.5)
@@ -364,6 +448,8 @@ if (isstep(3)){
     pbmcall=RunTSNE(pbmcall,dims=1:csc$step3$dims,seed.use = 100)
   }
   }
+  
+
   dir.create(paste(outdir,"step3",cscumap,sep="/"))
   umaporig=DimPlot(pbmcall,reduction = cscumap,split.by = "orig.ident",group.by = "orig.ident",ncol= 4)+
     theme(legend.text = element_text(size =8))+
@@ -376,9 +462,15 @@ if (isstep(3)){
   
   savepdf(paste(outdir,"step3",cscumap,"plotall_ident",sep="/"),umaporig2,widthle = 10,heightle = 8)
   
-  pbmcall <- AddMetaData(pbmcall,pbmcall@reductions$umap@cell.embeddings,col.name = colnames(pbmcall@reductions$umap@cell.embeddings))
-  umap <- ggplot(pbmcall@meta.data,aes(x=UMAP_1,y=UMAP_2))+geom_point(size =1,aes(color=log2(nCount_RNA)))+theme_set(theme_bw())+theme(panel.grid.major=element_line(colour=NA),panel.border=element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank())+theme(panel.border = element_blank(), axis.line = element_line(size = 0.7))+scale_color_gradientn(colours = c("#0066CC","#FFCC33","#FF0000"))
+  
+  
+  reduction_embeddings <- pbmcall@reductions[[cscumap]]@cell.embeddings
+  reduction_cols <- colnames(reduction_embeddings)
+  pbmcall <- AddMetaData(pbmcall,reduction_embeddings,col.name = reduction_cols)
+  umap <- ggplot(pbmcall@meta.data,aes(x=.data[[reduction_cols[1]]],y=.data[[reduction_cols[2]]]))+geom_point(size =1,aes(color=log2(nCount_RNA)))+theme_set(theme_bw())+theme(panel.grid.major=element_line(colour=NA),panel.border=element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank())+theme(panel.border = element_blank(), axis.line = element_line(size = 0.7))+scale_color_gradientn(colours = c("#0066CC","#FFCC33","#FF0000"))
   savepdf(paste(outdir,"step3",cscumap,"plotby_nCount",sep="/"),umap,widthle = 10,heightle = 8)
+  
+  
   
   if(csc$step3$clustercell){
     pbmcall <- FindNeighbors(pbmcall, dims = 1:csc$step3$dims)
@@ -405,15 +497,35 @@ if (isstep(3)){
     barpli = ggplot(total3,aes(cluster,counts,fill=orig.ident)) + geom_bar(stat = 'identity',position = 'fill') + scale_x_discrete(limits = colnames(test3)[-1])
     
     savepdf(paste(outdir,"step3",cscumap,"barplot",sep="/"),barpli,widthle = 10, heightle = 8) 
+    
+    
     ###############################################################
     hpca.se <- readRDS(csc$step3$singler)
-    #largdata=readRDS("/data/haplox/users/liyq/singlecell/bin/singleRdata/DatabaseImmuneCellExpressionDataRDS.rds")
     
-    testcd=GetAssayData(pbmcall)
-    immannot=SingleR(test = testcd,ref = hpca.se,labels = hpca.se$label.fine)
-    foo=immannot$labels
-    names(foo)=immannot@rownames
-    pbmcall$singleR=foo
+    # Seurat v5 stores per-sample RNA data in layers after merge. Join layers
+    # before SingleR so GetAssayData can return one expression matrix.
+    DefaultAssay(pbmcall) <- "RNA"
+    if (exists("JoinLayers")) {
+      pbmcall <- tryCatch(
+        JoinLayers(pbmcall, assay = "RNA"),
+        error = function(e) {
+          logwarn("JoinLayers before SingleR skipped: %s", e$message)
+          pbmcall
+        }
+      )
+    }
+    pbmcall <- NormalizeData(pbmcall)
+    testcd <- tryCatch(
+      GetAssayData(pbmcall, assay = "RNA", layer = "data"),
+      error = function(e) {
+        logwarn("GetAssayData layer='data' failed, fallback to slot='data': %s", e$message)
+        GetAssayData(pbmcall, assay = "RNA", slot = "data")
+      }
+    )
+    immannot <- SingleR(test = testcd, ref = hpca.se, labels = hpca.se$label.fine)
+    foo <- immannot$labels
+    names(foo) <- rownames(immannot)
+    pbmcall$singleR <- foo
     
     singRtxt= pbmcall@meta.data %>% group_by(seurat_clusters,singleR) %>% summarise(n_cells=n()) %>% arrange(seurat_clusters,desc(n_cells))
     x <- vector()
@@ -490,6 +602,14 @@ if (isstep(4)){
   }
   if(csc$step4$clustermarkers){
     dir.create(paste(outdir,"step4",sep="/"))
+    DefaultAssay(pbmcall) <- "RNA"
+    pbmcall <- tryCatch({
+      JoinLayers(pbmcall, assay = "RNA")
+    }, error = function(e) {
+      message("Warning: JoinLayers before FindAllMarkers skipped: ", conditionMessage(e))
+      pbmcall
+    })
+    pbmcall <- NormalizeData(pbmcall)
     pbmcall.markers <- FindAllMarkers(pbmcall,only.pos = TRUE,test.use = csc$step4$findmarkers_testuse,min.pct = csc$step4$min_pct)
     top10<- subset(pbmcall.markers,avg_log2FC > 0.5 & p_val_adj < 0.05) %>% group_by(cluster) %>% top_n(10, avg_log2FC)
     sorttop10 <- top10[order(top10$cluster,-top10$avg_log2FC),]
@@ -498,13 +618,19 @@ if (isstep(4)){
     write.table(pbmcall.markerss,file=paste(outdir,"step4",paste0("clusterall_genelist.xls"),sep="/"),sep='\t',row.names = F,quote = F)
     write.table(sorttop10,file=paste(outdir,"step4",paste0("clusterall_top10genelist.xls"),sep="/"),sep='\t',row.names = TRUE, col.names = NA,quote = F)
     write.table(subset(pbmcall.markers,avg_log2FC > 0.5 & p_val_adj < 0.05),file=paste(outdir,"step4",paste0("clusterall_adj0.05_logFC0.5genelist.xls"),sep="/"),sep='\t',row.names = TRUE, col.names = NA,quote = F)
-    #top10=read.csv("/haplox/haprs/liyq/Project/HGC20220110002_sc_guangzhoudaxue/workfile/step4/clusterall_top10genelist.xls",sep = "\t",quote = "",header = 1)
     #pdf(paste(outdir,"step4",paste0("cluster_top10geneheatmap.pdf"),sep="/"))
     #DoHeatmap(pbmcall,features = top10$gene) + scale_y_discrete(breaks=NULL)
     #dev.off()
-    subobj=subset(pbmcall,downsample=1000)
-    plot <- DoHeatmap(object = subobj,features = top10$gene) +NoLegend() + scale_y_discrete(breaks=NULL)
-    savepdf(paste(outdir,"step4",paste0("cluster_top10geneheatmap"),sep="/"),plot)
+    heatmap_genes <- intersect(unique(as.character(top10$gene)), rownames(pbmcall))
+    if(length(heatmap_genes) > 0){
+      subobj=subset(pbmcall,downsample=1000)
+      DefaultAssay(subobj) <- "RNA"
+      subobj <- ScaleData(subobj, features = heatmap_genes, verbose = FALSE)
+      plot <- DoHeatmap(object = subobj,features = heatmap_genes) +NoLegend() + scale_y_discrete(breaks=NULL)
+      savepdf(paste(outdir,"step4",paste0("cluster_top10geneheatmap"),sep="/"),plot)
+    } else {
+      message("Warning: cluster_top10geneheatmap skipped because no top10 marker genes were available in RNA assay.")
+    }
     #png(paste(outdir,"step4",paste0("cluster_top10geneheatmap.png"),sep="/"))
     #DoHeatmap(pbmcall,features = top10$gene) + scale_y_discrete(breaks=NULL)
     #dev.off()
@@ -531,7 +657,7 @@ if (isstep(4)){
       logdebug("ok")
       dir.create(paste(outdir,"step4","custer",sep="/"))
       for(i in names(csc$step4$custer)){
-        
+        pbmcall@active.assay ="RNA"
         #igene=eval(parse(text=paste0("csc$step4$custer$",i)))
         igene=csc$step4$custer[[i]] #20210926
         dir.create(paste(outdir,"step4","custer",i,sep="/"))
@@ -545,14 +671,24 @@ if (isstep(4)){
         }
         logwarn("list of not exist gene: %s" , noexistgene)
         for (m in igene){
-          logdebug(m)
-          fig4.3=VlnPlot(pbmcall,features = m,pt.size=-1)
-          savepdf(paste(outdir,"step4","custer",i,paste0(m,"_vlnplot"),sep="/"),fig4.3)
-          fig4.4=FeaturePlot( pbmcall, 
-                              features = m, 
-                              cols = c("lightgrey", "blue"),
-                              reduction = csc$step3$reduction)
-          savepdf(paste(outdir,"step4","custer",i,paste0(m,"_reduction"),sep="/"),fig4.4)
+          tryCatch(
+            {
+              logdebug(m)
+              fig4.3=VlnPlot(pbmcall,features = m,pt.size=-1)
+              savepdf(paste(outdir,"step4","custer",i,paste0(m,"_vlnplot"),sep="/"),fig4.3)
+              fig4.4=FeaturePlot( pbmcall, 
+                                  features = m, 
+                                  cols = c("lightgrey", "blue"),
+                                  reduction = csc$step3$reduction)
+              savepdf(paste(outdir,"step4","custer",i,paste0(m,"_reduction"),sep="/"),fig4.4)
+              
+              
+            },error = function ( e ) {
+              outb=FALSE
+              logerror("gene something wrong in %s",m)
+            },finally = {
+              print(m)
+            })
         }
         if(length(names(pbmcall@assays))>1){
           if("integrated" %in% names(pbmcall@assays)){
@@ -648,7 +784,6 @@ if (isstep(4)){
   
 }
 
-#pbmcall=readRDS("/haplox/haprs/liyq/singlecell/test/mmu10/test/test/workout/temp/step4.RDS")
 if (isstep(5)){
   loginfo("step5 start")
   dir.create(paste(outdir,"step5",sep="/"))
@@ -657,16 +792,198 @@ if (isstep(5)){
     pbmcall=getrds(4)
   }
   library(monocle)
-  #从Seurat转换
-  if(ncol(pbmcall@assays$RNA@data)>20000){
-    mincells=sample(seq_len(ncol(pbmcall@assays$RNA@data)),size=20000)
-    datamon=as(pbmcall@assays$RNA@data[,mincells,drop=FALSE],"sparseMatrix")
+  if (packageVersion("dplyr") >= "1.2.0") {
+    dplyr_ns <- asNamespace("dplyr")
+    compat_select_ <- function(.data, ..., .dots = list()) {
+      dots <- c(list(...), .dots)
+      if (length(dots) == 0) {
+        return(.data)
+      }
+      nms <- names(dots)
+      exprs <- lapply(seq_along(dots), function(i) {
+        val <- dots[[i]]
+        val_chr <- as.character(val)[1]
+        if (is.numeric(val) || grepl("^[0-9]+$", val_chr)) {
+          idx <- as.integer(val_chr)
+          if (!is.na(idx) && idx >= 1 && idx <= ncol(.data)) {
+            val_chr <- colnames(.data)[idx]
+          }
+        }
+        rlang::sym(val_chr)
+      })
+      expr_names <- vapply(seq_along(exprs), function(i) {
+        if (!is.null(nms) && nzchar(nms[i])) {
+          nms[i]
+        } else {
+          rlang::as_name(exprs[[i]])
+        }
+      }, character(1))
+      exprs <- rlang::set_names(exprs, expr_names)
+      dplyr::select(.data, !!!exprs)
+    }
+    compat_group_by_ <- function(.data, ..., .dots = list()) {
+      cols <- c(unlist(list(...)), unlist(.dots))
+      cols <- as.character(cols)
+      if (length(cols) == 0) {
+        return(dplyr::group_by(.data))
+      }
+      dplyr::group_by(.data, !!!rlang::syms(cols))
+    }
+    unlockBinding("select_", dplyr_ns)
+    assign("select_", compat_select_, envir = dplyr_ns)
+    lockBinding("select_", dplyr_ns)
+    unlockBinding("group_by_", dplyr_ns)
+    assign("group_by_", compat_group_by_, envir = dplyr_ns)
+    lockBinding("group_by_", dplyr_ns)
+    monocle_ns <- asNamespace("monocle")
+    if (exists("select_", envir = monocle_ns, inherits = FALSE)) {
+      unlockBinding("select_", monocle_ns)
+      assign("select_", compat_select_, envir = monocle_ns)
+      lockBinding("select_", monocle_ns)
+    }
+    if (exists("group_by_", envir = monocle_ns, inherits = FALSE)) {
+      unlockBinding("group_by_", monocle_ns)
+      assign("group_by_", compat_group_by_, envir = monocle_ns)
+      lockBinding("group_by_", monocle_ns)
+    }
+    compat_plot_cell_trajectory <- getFromNamespace("plot_cell_trajectory", "monocle")
+    plot_cell_trajectory_body <- paste(deparse(body(compat_plot_cell_trajectory)), collapse = "\n")
+    plot_cell_trajectory_body <- gsub("dplyr::select_\\(", "compat_select_(", plot_cell_trajectory_body)
+    plot_cell_trajectory_body <- gsub("select_\\(", "compat_select_(", plot_cell_trajectory_body)
+    body(compat_plot_cell_trajectory) <- parse(text = plot_cell_trajectory_body)[[1]]
+    compat_plot_env <- new.env(parent = monocle_ns)
+    assign("compat_select_", compat_select_, envir = compat_plot_env)
+    environment(compat_plot_cell_trajectory) <- compat_plot_env
+    unlockBinding("plot_cell_trajectory", monocle_ns)
+    assign("plot_cell_trajectory", compat_plot_cell_trajectory, envir = monocle_ns)
+    lockBinding("plot_cell_trajectory", monocle_ns)
+    assign("plot_cell_trajectory", compat_plot_cell_trajectory, envir = .GlobalEnv)
+  }
+  if (packageVersion("igraph") >= "1.3.0") {
+    igraph_ns <- asNamespace("igraph")
+    compat_graph_dfs <- function(graph, root, neimode = c("out", "in", "all", "total"),
+                                 unreachable = TRUE, father = FALSE, ...) {
+      mode <- match.arg(neimode)
+      igraph::dfs(graph, root = root, mode = mode, unreachable = unreachable,
+                  father = father, ...)
+    }
+    unlockBinding("graph.dfs", igraph_ns)
+    assign("graph.dfs", compat_graph_dfs, envir = igraph_ns)
+    lockBinding("graph.dfs", igraph_ns)
+    monocle_ns <- asNamespace("monocle")
+    if (exists("graph.dfs", envir = monocle_ns, inherits = FALSE)) {
+      unlockBinding("graph.dfs", monocle_ns)
+      assign("graph.dfs", compat_graph_dfs, envir = monocle_ns)
+      lockBinding("graph.dfs", monocle_ns)
+    }
+    compat_nei <- function(...){
+      getFromNamespace(".nei", "igraph")(...)
+    }
+    if (exists("nei", envir = igraph_ns, inherits = FALSE)) {
+      unlockBinding("nei", igraph_ns)
+      assign("nei", compat_nei, envir = igraph_ns)
+      lockBinding("nei", igraph_ns)
+    }
+    if (exists("nei", envir = monocle_ns, inherits = FALSE)) {
+      unlockBinding("nei", monocle_ns)
+      assign("nei", compat_nei, envir = monocle_ns)
+      lockBinding("nei", monocle_ns)
+    }
+  }
+  monocle_ns <- asNamespace("monocle")
+  compat_extract_ddrtree_ordering <- function(cds, root_cell, verbose = T) {
+    dp <- cellPairwiseDistances(cds)
+    dp_mst <- minSpanningTree(cds)
+    curr_state <- 1
+    res <- list(subtree = dp_mst, root = root_cell)
+    states = rep(1, ncol(dp))
+    names(states) <- V(dp_mst)$name
+    pseudotimes = rep(0, ncol(dp))
+    names(pseudotimes) <- V(dp_mst)$name
+    parents = rep(NA, ncol(dp))
+    names(parents) <- V(dp_mst)$name
+    mst_traversal <- igraph::dfs(dp_mst, root = root_cell, mode = "all",
+                                 unreachable = FALSE, father = TRUE)
+    mst_traversal$father <- as.numeric(mst_traversal$father)
+    curr_state <- 1
+    for (i in 1:length(mst_traversal$order)) {
+      curr_node = mst_traversal$order[i]
+      curr_node_name = V(dp_mst)[curr_node]$name
+      if (is.na(mst_traversal$father[curr_node]) == FALSE) {
+        parent_node = mst_traversal$father[curr_node]
+        parent_node_name = V(dp_mst)[parent_node]$name
+        parent_node_pseudotime = pseudotimes[parent_node_name]
+        parent_node_state = states[parent_node_name]
+        curr_node_pseudotime = parent_node_pseudotime + dp[curr_node_name, parent_node_name]
+        if (degree(dp_mst, v = parent_node_name) > 2) {
+          curr_state <- curr_state + 1
+        }
+      } else {
+        parent_node = NA
+        parent_node_name = NA
+        curr_node_pseudotime = 0
+      }
+      curr_node_state = curr_state
+      pseudotimes[curr_node_name] <- curr_node_pseudotime
+      states[curr_node_name] <- curr_node_state
+      parents[curr_node_name] <- parent_node_name
+    }
+    ordering_df <- data.frame(sample_name = names(states), cell_state = factor(states),
+                              pseudo_time = as.vector(pseudotimes), parent = parents)
+    row.names(ordering_df) <- ordering_df$sample_name
+    return(ordering_df)
+  }
+  environment(compat_extract_ddrtree_ordering) <- monocle_ns
+  unlockBinding("extract_ddrtree_ordering", monocle_ns)
+  assign("extract_ddrtree_ordering", compat_extract_ddrtree_ordering, envir = monocle_ns)
+  lockBinding("extract_ddrtree_ordering", monocle_ns)
+  if (packageVersion("igraph") >= "2.1.0") {
+    monocle_ns <- asNamespace("monocle")
+    compat_project2MST <- getFromNamespace("project2MST", "monocle")
+    project2MST_body <- paste(deparse(body(compat_project2MST)), collapse = "\n")
+    project2MST_body <- gsub("nei\\(", ".nei(", project2MST_body)
+    body(compat_project2MST) <- parse(text = project2MST_body)[[1]]
+    environment(compat_project2MST) <- monocle_ns
+    unlockBinding("project2MST", monocle_ns)
+    assign("project2MST", compat_project2MST, envir = monocle_ns)
+    lockBinding("project2MST", monocle_ns)
+    compat_buildBranchCellDataSet <- getFromNamespace("buildBranchCellDataSet", "monocle")
+    buildBranchCellDataSet_body <- paste(deparse(body(compat_buildBranchCellDataSet)), collapse = "\n")
+    buildBranchCellDataSet_body <- gsub("nei\\(", ".nei(", buildBranchCellDataSet_body)
+    buildBranchCellDataSet_body <- gsub('progenitor_method == "duplicate"', 'progenitor_method[1] == "duplicate"', buildBranchCellDataSet_body)
+    buildBranchCellDataSet_body <- gsub('progenitor_method == "sequential_split"', 'progenitor_method[1] == "sequential_split"', buildBranchCellDataSet_body)
+    body(compat_buildBranchCellDataSet) <- parse(text = buildBranchCellDataSet_body)[[1]]
+    environment(compat_buildBranchCellDataSet) <- monocle_ns
+    unlockBinding("buildBranchCellDataSet", monocle_ns)
+    assign("buildBranchCellDataSet", compat_buildBranchCellDataSet, envir = monocle_ns)
+    lockBinding("buildBranchCellDataSet", monocle_ns)
+  }
+  DefaultAssay(pbmcall) <- "RNA"
+  if (exists("JoinLayers")) {
+    pbmcall <- tryCatch(JoinLayers(pbmcall, assay = "RNA"), error = function(e) {
+      logwarn("JoinLayers before monocle skipped: %s", e$message)
+      pbmcall
+    })
+  }
+  pbmcall <- NormalizeData(pbmcall)
+  step5_downsample <- ifelse(is.null(csc$step5$downsample), 5000, as.numeric(csc$step5$downsample))
+  rna_data <- tryCatch(
+    GetAssayData(pbmcall, assay = "RNA", layer = "data"),
+    error = function(e) {
+      logwarn("GetAssayData layer='data' before monocle failed, fallback to slot='data': %s", e$message)
+      GetAssayData(pbmcall, assay = "RNA", slot = "data")
+    }
+  )
+  if(ncol(rna_data)>step5_downsample){
+    set.seed(123)
+    mincells=sample(seq_len(ncol(rna_data)),size=step5_downsample)
+    datamon=as(rna_data[,mincells,drop=FALSE],"sparseMatrix")
     
     pd<-new("AnnotatedDataFrame", data = pbmcall@meta.data[colnames(datamon),])
     
   }else{
-    datamon=as(pbmcall@assays$RNA@data,'sparseMatrix')
-    pd<-new("AnnotatedDataFrame", data = pbmcall@meta.data)
+    datamon=as(rna_data,'sparseMatrix')
+    pd<-new("AnnotatedDataFrame", data = pbmcall@meta.data[colnames(datamon),])
     
   }
   fd<-new("AnnotatedDataFrame", data = data.frame(gene_short_name = row.names(datamon), row.names = row.names(datamon)))
@@ -778,269 +1095,51 @@ if (isstep(5)){
 }
 
 if (isstep(6)){
-  loginfo("step5 start")
-  dir.create(paste(outdir,"step6",sep="/"))
+  loginfo("step6 Loupe Browser start")
+  dir.create(paste(outdir,"step6",sep="/"), recursive = T)
   if (!isstep(4)){
-    loginfo("input step3 rds")
+    loginfo("input step4 rds")
     pbmcall=getrds(4)
   }
-  library(cerebroApp) 
-  pbmcall<- RunUMAP(pbmcall,  reduction.name = 'UMAP_3D',
-                    reduction.key = 'UMAP3D_',
-                    dims=1:csc$step3$dims,
-                    n.components = 3,seed.use = 100
-  )
-  
-  pbmcall <- BuildClusterTree(
-    pbmcall,
-    dims = 1:csc$step3$dims,
-    reorder = FALSE,
-    reorder.numeric = FALSE
-  )
-  pbmcall@misc$trees$seurat_clusters <- pbmcall@tools$BuildClusterTree
-  
-  pbmcall <- getMostExpressedGenes(
-    pbmcall,
-    assay = 'RNA',
-    column_sample =  'orig.ident',
-    column_cluster = 'seurat_clusters')
-  
-  
-  
-  getMarkerGenes_my<-function (object, assay = "RNA", organism = NULL, column_sample = "sample", 
-                               column_cluster = "cluster", only_pos = TRUE, min_pct = 0.7, 
-                               thresh_logFC = 0.25, thresh_p_val = 0.01, test = "wilcox", 
-                               verbose = TRUE, ...) 
-  {
-    if (!requireNamespace("Seurat", quietly = TRUE)) {
-      stop("Package 'Seurat' needed for this function to work. Please install it.", 
-           call. = FALSE)
-    }
-    if (is.null(column_sample) | (column_sample %in% names(object@meta.data) == 
-                                  FALSE)) {
-      stop(paste0("Cannot find specified column (`object@meta.data$", 
-                  column_sample, "`) that is supposed to contain sample information."), 
-           call. = FALSE)
-    }
-    if (is.null(column_cluster) | (column_cluster %in% names(object@meta.data) == 
-                                   FALSE)) {
-      stop(paste0("Cannot find specified column (`object@meta.data$", 
-                  column_cluster, "`) that is supposed to contain cluster information."), 
-           call. = FALSE)
-    }
-    if (organism %in% c("hg", "mm") == FALSE) {
-      message(paste0("[", format(Sys.time(), "%H:%M:%S"), 
-                     "] No information about genes on cell surface because organism is ", 
-                     "either not specified or not human/mouse."))
-    }
-    else {
-      if (organism == "hg" || organism == "human") {
-        temp_attributes <- "hgnc_symbol"
-        temp_dataset <- "hsapiens_gene_ensembl"
-      }
-      else if (organism == "mm" || organism == "mouse") {
-        temp_attributes <- "external_gene_name"
-        temp_dataset <- "mmusculus_gene_ensembl"
-      }
-      attempt <- 1
-      while (!exists("genes_on_cell_surface") && attempt <= 
-             3) {
-        try(genes_on_cell_surface <- biomaRt::getBM(attributes = temp_attributes, 
-                                                    filters = "go", values = "GO:0009986", mart = biomaRt::useMart("ensembl", 
-                                                                                                                   dataset = temp_dataset))[, 1])
-      }
-      if (!exists("genes_on_cell_surface")) {
-        message(paste0("[", format(Sys.time(), "%H:%M:%S"), 
-                       "] Genes in GO term \"cell surface\" (GO:0009986) could not be ", 
-                       "retrieved, possibly due to the server not being reachable at the ", 
-                       "moment."))
-      }
-    }
-    if (is.factor(object@meta.data[[column_sample]])) {
-      sample_names <- levels(object@meta.data[[column_sample]])
-    }
-    else {
-      sample_names <- unique(object@meta.data[[column_sample]])
-    }
-    if (length(sample_names) > 1) {
-      message(paste0("[", format(Sys.time(), "%H:%M:%S"), 
-                     "] Get marker genes for ", length(sample_names), 
-                     " samples..."))
-      if (object@version < 3) {
-        object <- Seurat::SetAllIdent(object, id = column_sample)
-        object@ident <- factor(object@ident, levels = sample_names)
-        if (utils::packageVersion("Seurat") < 3) {
-          markers_by_sample <- Seurat::FindAllMarkers(object, 
-                                                      only.pos = only_pos, min.pct = min_pct, thresh.use = thresh_logFC, 
-                                                      return.thresh = thresh_p_val, test.use = test, 
-                                                      print.bar = verbose, ...)
-        }
-        else {
-          if ((assay %in% names(object@assays) == FALSE)) {
-            stop(paste0("Assay slot `", assay, "` could not be found in provided Seurat ", 
-                        "object."), call. = FALSE)
-          }
-          markers_by_sample <- Seurat::FindAllMarkers(object, 
-                                                      assay = assay, only.pos = only_pos, min.pct = min_pct, 
-                                                      logfc.threshold = thresh_logFC, return.thresh = thresh_p_val, 
-                                                      test.use = test, verbose = verbose, ...)
-        }
-      }
-      else {
-        Seurat::Idents(object) <- factor(object@meta.data[[column_sample]], 
-                                         levels = sample_names)
-        if (utils::packageVersion("Seurat") < 3) {
-          markers_by_sample <- Seurat::FindAllMarkers(object, 
-                                                      only.pos = only_pos, min.pct = min_pct, thresh.use = thresh_logFC, 
-                                                      return.thresh = thresh_p_val, test.use = test, 
-                                                      print.bar = verbose, ...)
-        }
-        else {
-          markers_by_sample <- Seurat::FindAllMarkers(object, 
-                                                      assay = assay, only.pos = only_pos, min.pct = min_pct, 
-                                                      logfc.threshold = thresh_logFC, return.thresh = thresh_p_val, 
-                                                      test.use = test, verbose = verbose, ...)
-        }
-      }
-      if (nrow(markers_by_sample) > 0) {
-        markers_by_sample <- markers_by_sample %>% dplyr::select(c("cluster", 
-                                                                   "gene", "p_val", "avg_log2FC", "pct.1", "pct.2", 
-                                                                   "p_val_adj")) %>% dplyr::rename(sample = .data$cluster)
-        if (exists("genes_on_cell_surface")) {
-          markers_by_sample <- markers_by_sample %>% dplyr::mutate(on_cell_surface = .data$gene %in% 
-                                                                     genes_on_cell_surface)
-        }
-      }
-      else {
-        message(paste0("[", format(Sys.time(), "%H:%M:%S"), 
-                       "] No marker genes found for any of the samples."))
-        markers_by_sample <- "no_markers_found"
-      }
-    }
-    else {
-      message(paste0("[", format(Sys.time(), "%H:%M:%S"), 
-                     "] Sample column provided but only 1 sample found."))
-      markers_by_sample <- "no_markers_found"
-    }
-    if (is.factor(object@meta.data[[column_cluster]])) {
-      cluster_names <- levels(object@meta.data[[column_cluster]])
-    }
-    else {
-      cluster_names <- unique(object@meta.data[[column_cluster]]) %>% 
-        sort()
-    }
-    if (length(cluster_names) > 1) {
-      message(paste0("[", format(Sys.time(), "%H:%M:%S"), 
-                     "] Get marker genes for ", length(cluster_names), 
-                     " clusters..."))
-      if (object@version < 3) {
-        object <- Seurat::SetAllIdent(object, id = column_cluster)
-        object@ident <- factor(object@ident, levels = cluster_names)
-        if (utils::packageVersion("Seurat") < 3) {
-          markers_by_cluster <- Seurat::FindAllMarkers(object, 
-                                                       only.pos = only_pos, min.pct = min_pct, thresh.use = thresh_logFC, 
-                                                       return.thresh = thresh_p_val, test.use = test, 
-                                                       print.bar = verbose, ...)
-        }
-        else {
-          if ((assay %in% names(object@assays) == FALSE)) {
-            stop(paste0("Assay slot `", assay, "` could not be found in provided Seurat ", 
-                        "object."), call. = FALSE)
-          }
-          markers_by_cluster <- Seurat::FindAllMarkers(object, 
-                                                       assay = assay, only.pos = only_pos, min.pct = min_pct, 
-                                                       logfc.threshold = thresh_logFC, return.thresh = thresh_p_val, 
-                                                       test.use = test, verbose = verbose, ...)
-        }
-      }
-      else {
-        Seurat::Idents(object) <- factor(object@meta.data[[column_cluster]], 
-                                         levels = cluster_names)
-        if (utils::packageVersion("Seurat") < 3) {
-          markers_by_cluster <- Seurat::FindAllMarkers(object, 
-                                                       only.pos = only_pos, min.pct = min_pct, thresh.use = thresh_logFC, 
-                                                       return.thresh = thresh_p_val, test.use = test, 
-                                                       print.bar = verbose, ...)
-        }
-        else {
-          markers_by_cluster <- Seurat::FindAllMarkers(object, 
-                                                       assay = assay, only.pos = only_pos, min.pct = min_pct, 
-                                                       logfc.threshold = thresh_logFC, return.thresh = thresh_p_val, 
-                                                       test.use = test, verbose = verbose, ...)
-        }
-      }
-      if (nrow(markers_by_cluster) > 0) {
-        markers_by_cluster <- markers_by_cluster %>% dplyr::select(c("cluster", 
-                                                                     "gene", "p_val", "avg_log2FC", "pct.1", "pct.2", 
-                                                                     "p_val_adj"))
-        if (exists("genes_on_cell_surface")) {
-          markers_by_cluster <- markers_by_cluster %>% 
-            dplyr::mutate(on_cell_surface = .data$gene %in% 
-                            genes_on_cell_surface)
-        }
-      }
-      else {
-        message(paste0("[", format(Sys.time(), "%H:%M:%S"), 
-                       "] No marker genes found for any of the clusters."))
-        markers_by_cluster <- "no_markers_found"
-      }
-    }
-    else {
-      message(paste0("[", format(Sys.time(), "%H:%M:%S"), 
-                     "] Cluster column provided but only 1 cluster found."))
-      markers_by_cluster <- "no_markers_found"
-    }
-    object@misc$marker_genes <- list(by_sample = markers_by_sample, 
-                                     by_cluster = markers_by_cluster, parameters = list(only_positive = only_pos, 
-                                                                                        minimum_percentage = min_pct, logFC_threshold = thresh_logFC, 
-                                                                                        p_value_threshold = thresh_p_val, test = test))
-    return(object)
+  if (!requireNamespace("loupeR", quietly = TRUE)) {
+    stop("Package 'loupeR' is required for step6 Loupe Browser export. Install 10x Genomics loupeR first.")
   }
-  
-  pbmcall <- getMarkerGenes_my(
-    pbmcall,
-    assay = 'RNA',
-    organism = ifelse(csc$step1$mttype=="mt","mm","hg"),
-    column_sample = "orig.ident",
-    column_cluster="seurat_clusters",
-    name = 'cerebro_seurat',
-    only_pos = F
+  loupe_ns <- asNamespace("loupeR")
+  loupe_eula_ok <- get("eula_have_agreed", envir = loupe_ns)()
+  if (!loupe_eula_ok) {
+    loupe_accept <- tolower(trimws(Sys.getenv("AUTO_ACCEPT_EULA", unset = "false")))
+    if (!loupe_accept %in% c("t", "true", "y", "yes")) {
+      stop("loupeR requires 10x EULA acceptance. Set AUTO_ACCEPT_EULA=true or run loupeR::setup() before step6.")
+    }
+    loupeR::setup()
+  }
+  DefaultAssay(pbmcall) <- "RNA"
+  if (exists("JoinLayers")) {
+    pbmcall <- tryCatch(JoinLayers(pbmcall, assay = "RNA"), error = function(e) {
+      logwarn("JoinLayers before Loupe export skipped: %s", e$message)
+      pbmcall
+    })
+  }
+  loupe_outdir <- paste(outdir, "step6", sep = "/")
+  loupe_name <- ifelse(is.null(csc$step6$cloupe_name), "singlecell", csc$step6$cloupe_name)
+  loupe_metadata <- c("orig.ident", "seurat_clusters")
+  loupe_metadata <- loupe_metadata[loupe_metadata %in% colnames(pbmcall@meta.data)]
+  loupe_file <- file.path(loupe_outdir, paste0(loupe_name, ".cloupe"))
+  loginfo("export Loupe Browser file to %s", loupe_file)
+  loupeR::create_loupe_from_seurat(
+    obj = pbmcall,
+    output_dir = loupe_outdir,
+    output_name = loupe_name,
+    metadata_cols = loupe_metadata,
+    force = TRUE
   )
-  exportFromSeurat(
-    pbmcall,
-    assay = "RNA",
-    file=paste0(paste(outdir,"step6",sep="/"),"/cerebro_seurat",Sys.Date(),".crb"),
-    experiment_name="sample",
-    organism=csc$specis,
-    column_sample = "orig.ident",
-    column_cluster = "seurat_clusters",
-    column_nUMI = "nCount_RNA",
-    column_nGene = "nFeature_RNA",
-    column_cell_cycle_seurat = NULL,
-    column_cell_cycle_cyclone = NULL,
-    add_all_meta_data = TRUE
-  )
-  loginfo("cerebroApp end")
-  library(Matrix)
-  dir.create(paste(outdir,"step6","circos",sep="/"))
-  commanda=sprintf('Rscript %s -r %s -o %s -s gene -m %s',
-                   csc$step6$circosbin,
-                   paste0(outdir,"/temp/step4.RDS"),
-                   paste(outdir,"step6","circos",".",sep="/"),
-                   paste0(outdir,"/step4/clusterall_genelist.xls")
-  )
-  syscomd(commanda,savef = paste(outdir,"shell","05.circos.sh",sep = "/"))
-  commanda=sprintf( "perl %s  -t %s -c %s -m %s -d  %s -p result -a %s",
-                    csc$step6$circos_perl_bin,
-                    paste(outdir,"step6","circos","type2gene.txt",sep="/"),
-                    paste(outdir,"step6","circos","gene.cellpercent.txt",sep="/"),
-                    paste(outdir,"step6","circos","gene.ClusterMean.txt",sep="/"),
-                    paste(outdir,"step6","circos","result",sep="/"),
-                    paste0(outdir,"/step4/clusterall_genelist.xls")
-                    #paste(outdir,"step6","circos","test",sep="/")
-                    
-  )
-  syscomd(commanda,savef = paste(outdir,"shell","05.circos.sh",sep = "/"))
+  if (!file.exists(loupe_file)) {
+    stop("Loupe Browser export did not create expected file: ", loupe_file)
+  }
+  loginfo("Loupe Browser export end: %s", loupe_file)
+
+  loginfo("step6 circos skipped; step6 now exports Loupe Browser .cloupe only")
+  loginfo("step6 Loupe Browser end")
 }
 
 if (isstep(7)){
@@ -1060,16 +1159,20 @@ if (isstep(7)){
   
 }
 if (isstep(8)){
-  loginfo("step8 cytoTRACE start")
+  loginfo("step8 CytoTRACE2 start")
   dir.create(paste(outdir,"step8",sep="/"))
 
-  commanda=sprintf( "Rscript %s -r %s  -o %s ",
+  step8_species <- ifelse(is.null(csc$step8$species), "human", csc$step8$species)
+  step8_ncore <- ifelse(is.null(csc$step8$ncore), 8, csc$step8$ncore)
+  commanda=sprintf( "Rscript %s -r %s -o %s -s %s -n %s ",
                     csc$step8$cytoTRACE_bin,
                     paste0(outtemp,"step4.RDS"),
-                    paste(outdir,"step8",sep="/")
+                    paste(outdir,"step8",sep="/"),
+                    step8_species,
+                    step8_ncore
   )
-  syscomd(commanda,savef = paste(outdir,"shell","08.cytoTRACE.sh",sep = "/"))
-  loginfo("step8 cytoTRACE end")
+  syscomd(commanda,savef = paste(outdir,"shell","08.CytoTRACE2.sh",sep = "/"))
+  loginfo("step8 CytoTRACE2 end")
   
 }
 if (isstep(9)){
@@ -1107,7 +1210,7 @@ if (isstep(9)){
 #   syscomd(commanda,savef = paste(outdir,"shell","06.all.sh",sep = "/"))
 # }
 # if(isstep(6)){
-#   commanda=sprintf("mv %s %s",paste(outdir,"step6",sep="/"),paste(outdir,"07.Cerebro",sep="/"))
+#   commanda=sprintf("mv %s %s",paste(outdir,"step6",sep="/"),paste(outdir,"07.LoupeBrowser",sep="/"))
 #   syscomd(commanda,savef = paste(outdir,"shell","06.all.sh",sep = "/"))
 # }
 # if(isstep(7)){
@@ -1131,9 +1234,23 @@ if(isstep(10)){
   library(fgsea)
   library(ggalluvial)
   library(sys)
-  #  outdir="/haplox/haprs/liyq/singlecell/allliver/getout/step5/test"
-  #  pbmcall=readRDS("/haplox/haprs/liyq/singlecell/allliver/step4.3.RDS")
-  data.input <- GetAssayData(pbmcall, slot = "data",assay = "RNA")
+  DefaultAssay(pbmcall) <- "RNA"
+  if (exists("JoinLayers")) {
+    pbmcall <- tryCatch(
+      JoinLayers(pbmcall, assay = "RNA"),
+      error = function(e) {
+        logwarn("JoinLayers before CellChat skipped: %s", e$message)
+        pbmcall
+      }
+    )
+  }
+  data.input <- tryCatch(
+    GetAssayData(pbmcall, assay = "RNA", layer = "data"),
+    error = function(e) {
+      logwarn("GetAssayData layer='data' before CellChat failed, fallback to slot='data': %s", e$message)
+      GetAssayData(pbmcall, assay = "RNA", slot = "data")
+    }
+  )
   labels <- Idents(pbmcall)
   meta=pbmcall@meta.data
   cell.use = rownames(meta)
@@ -1172,7 +1289,11 @@ if(isstep(10)){
   cellchat <- identifyOverExpressedGenes(cellchat)
   cellchat <- identifyOverExpressedInteractions(cellchat)
   # project gene expression data onto PPI network (optional)
-  cellchat <- projectData(cellchat, PPI.human)
+  if (exists("projectData")) {
+    cellchat <- projectData(cellchat, PPI.human)
+  } else {
+    logwarn("CellChat projectData() is unavailable in this installed version; skip optional PPI projection")
+  }
   cellchat <- computeCommunProb(cellchat)
   cellchat <- filterCommunication(cellchat, min.cells = 10)
   cellchat <- computeCommunProbPathway(cellchat)
@@ -1271,11 +1392,24 @@ if(isstep(10)){
   dir.create(paste(outdir,"step10","net_circle","bubble",sep="/"),recursive = T)
   for(i in 1:nrow(mat)){
     #  pdf(paste(outdir,"step10","net_circle","bubble",paste0(rownames(mat2)[i], "_bubble.pdf"),sep="/"),width = 7,height = 7)
-    gg=netVisual_bubble(cellchat,sources.use=i,remove.isolate = FALSE,font.size=15,font.size.title=15,angle.x=45)+
-      theme(legend.text = element_text(size = 12,
-                                       face = "bold"),
-            legend.title  = element_text( size = 12,
-                                          face = "bold"))
+    tryCatch(
+      {
+        gg=netVisual_bubble(cellchat,sources.use=i,remove.isolate = FALSE,font.size=10,font.size.title=15,angle.x=45)+
+          theme(legend.text = element_text(size = 9,
+                                           face = "bold"),
+                legend.title  = element_text( size = 10,
+                                              face = "bold"))
+        
+        
+      },error = function ( e ) {
+        outb=FALSE
+        logerror(print(outb))
+        return(outb)
+        
+      },finally = {
+        print("netVisual_bubble end")
+      }
+    )
     # Sys.sleep(1)
     #  dev.off()
     # Sys.sleep(1)
@@ -1297,29 +1431,92 @@ if(isstep(10)){
 if(isstep(11)){
   loginfo("step11 ClusterProfiler start")
   dir.create(paste(outdir,"step11",sep="/"))
- listdirs4= list.dirs(paste(outdir,"step4",sep="/"))  
- listdirs4=listdirs4[str_detect(listdirs4,"step4/cluster[0-9]+$")]
- basename(listdirs4)
- 
- for(i in basename(listdirs4)){
-   
-
- 
-    dir.create(paste(outdir,"step11",i,sep="/"))
-    setwd(paste(outdir,"step11",i,sep="/"))
-    cat(csc$step11$ClusterProfiler[-1],
-        "-f",paste0(outdir,"/step4/",i,"/",i,"_padj0.05_logFC0.5genelist.xls"),
-        "-n",paste0("\"",i,"\""),
-        "-o",paste(outdir,"step11",i,sep="/"),
-        file = paste(outdir,"step11",i,"run.sh",sep="/"),
-        "&",
-        sep=" ", fill= F, labels=NULL, append=F)
-    system(paste0("sh ",paste(outdir,"step11",i,"run.sh",sep="/")))
-    loginfo("step11 ClusterProfiler end")
+  
+  if(file.exists(paste(outdir,"step4",sep="/"))){
+    loginfo("find step4 dir")
+    listdirs4= list.dirs(paste(outdir,"step4",sep="/"))  
+    listdirs4=listdirs4[str_detect(listdirs4,"step4/cluster[0-9]+$")]
+    basename(listdirs4)
+    
+    for(i in basename(listdirs4)){
+      
+      
+      
+      dir.create(paste(outdir,"step11",i,sep="/"))
+      setwd(paste(outdir,"step11",i,sep="/"))
+      cat(csc$step11$ClusterProfiler[-1],
+          "-f",paste0(outdir,"/step4/",i,"/",i,"_padj0.05_logFC0.5genelist.xls"),
+          "-n",paste0("\"",i,"\""),
+          "-o",paste(outdir,"step11",i,sep="/"),
+          file = paste(outdir,"step11",i,"run.sh",sep="/"),
+          
+          sep=" ", fill= F, labels=NULL, append=F)
+      syscomd(paste0("sh ",paste(outdir,"step11",i,"run.sh",sep="/")), savef = paste(outdir,"shell","11.ClusterProfiler.sh",sep = "/"))
+      loginfo("step11 ClusterProfiler end")
+      
+    }
+    
+  }else if(file.exists(paste(outdir,"05.MarkerGene",sep="/"))){
+    loginfo("find 05.MarkerGene dir")
+    listdirs4= list.dirs(paste(outdir,"05.MarkerGene",sep="/"))  
+    listdirs4=listdirs4[str_detect(listdirs4,"05.MarkerGene/cluster[0-9]+$")]
+    basename(listdirs4)
+    
+    for(i in basename(listdirs4)){
+      
+      
+      
+      dir.create(paste(outdir,"step11",i,sep="/"))
+      setwd(paste(outdir,"step11",i,sep="/"))
+      cat(csc$step11$ClusterProfiler[-1],
+          "-f",paste0(outdir,"/05.MarkerGene/",i,"/",i,"_padj0.05_logFC0.5genelist.xls"),
+          "-n",paste0("\"",i,"\""),
+          "-o",paste(outdir,"step11",i,sep="/"),
+          file = paste(outdir,"step11",i,"run.sh",sep="/"),
+          
+          sep=" ", fill= F, labels=NULL, append=F)
+      syscomd(paste0("sh ",paste(outdir,"step11",i,"run.sh",sep="/")), savef = paste(outdir,"shell","11.ClusterProfiler.sh",sep = "/"))
+      loginfo("step11 ClusterProfiler end")
+      
+  }
+  }else{
+    logwarn("cont find 05.MarkerGene or 04.step dir,plese cheack ")
+    
     
 }
 }
 
+if(isstep(12)){
+  loginfo("step12 circos start")
+  dir.create(paste(outdir,"step12",sep="/"), recursive = T)
+  dir.create(paste(outdir,"step12","circos",sep="/"), recursive = T)
+  marker_file <- paste0(outdir,"/step4/clusterall_genelist.xls")
+  if (!file.exists(marker_file)) {
+    marker_file <- paste0(outdir,"/05.MarkerGene/clusterall_genelist.xls")
+  }
+  if (!file.exists(marker_file)) {
+    stop("Cannot find clusterall_genelist.xls for circos in step4 or 05.MarkerGene")
+  }
+  commanda=sprintf('Rscript %s -r %s -o %s -s gene -m %s',
+                   csc$step12$circosbin,
+                   paste0(outdir,"/temp/step4.RDS"),
+                   paste(outdir,"step12","circos",".",sep="/"),
+                   marker_file
+  )
+  syscomd(commanda,savef = paste(outdir,"shell","12.circos.sh",sep = "/"))
+  commanda=sprintf( "perl %s  -t %s -c %s -m %s -d  %s -p result -a %s",
+                    csc$step12$circos_perl_bin,
+                    paste(outdir,"step12","circos","type2gene.txt",sep="/"),
+                    paste(outdir,"step12","circos","gene.cellpercent.txt",sep="/"),
+                    paste(outdir,"step12","circos","gene.ClusterMean.txt",sep="/"),
+                    paste(outdir,"step12","circos","result",sep="/"),
+                    marker_file
+  )
+  syscomd(commanda,savef = paste(outdir,"shell","12.circos.sh",sep = "/"))
+  loginfo("step12 circos end")
+}
+
+  
 if(isstep(1)){
   commanda=sprintf("mv %s %s",paste(outdir,"00.cellranger",sep="/"),paste(outdir,"02.Cellranger",sep="/"))
   syscomd(commanda,savef = paste(outdir,"shell","06.all.sh",sep = "/"))
@@ -1341,7 +1538,7 @@ if(isstep(5)){
   syscomd(commanda,savef = paste(outdir,"shell","06.all.sh",sep = "/"))
 }
 if(isstep(6)){
-  commanda=sprintf("mv %s %s",paste(outdir,"step6",sep="/"),paste(outdir,"07.Cerebro",sep="/"))
+  commanda=sprintf("mv %s %s",paste(outdir,"step6",sep="/"),paste(outdir,"07.LoupeBrowser",sep="/"))
   syscomd(commanda,savef = paste(outdir,"shell","06.all.sh",sep = "/"))
 }
 if(isstep(7)){
@@ -1349,7 +1546,7 @@ if(isstep(7)){
   syscomd(commanda,savef = paste(outdir,"shell","06.all.sh",sep = "/"))
 }
 if(isstep(8)){
-  commanda=sprintf("mv %s %s",paste(outdir,"step8",sep="/"),paste(outdir,"09.cytoTRACE",sep="/"))
+  commanda=sprintf("mv %s %s",paste(outdir,"step8",sep="/"),paste(outdir,"09.CytoTRACE2",sep="/"))
   syscomd(commanda,savef = paste(outdir,"shell","06.all.sh",sep = "/"))
 }
 if(isstep(9)){
@@ -1362,6 +1559,11 @@ if(isstep(10)){
   syscomd(commanda,savef = paste(outdir,"shell","06.all.sh",sep = "/"))
 }
 if(isstep(11)){
-  commanda=sprintf("mv %s %s",paste(outdir,"step11",sep="/"),paste(outdir,"11.ClusterProfiler",sep="/"))
+  commanda=sprintf("mv %s %s",paste(outdir,"step11",sep="/"),paste(outdir,"12.ClusterProfiler",sep="/"))
+  syscomd(commanda,savef = paste(outdir,"shell","06.all.sh",sep = "/"))
+}
+
+if(isstep(12)){
+  commanda=sprintf("mv %s %s",paste(outdir,"step12",sep="/"),paste(outdir,"13.Circos",sep="/"))
   syscomd(commanda,savef = paste(outdir,"shell","06.all.sh",sep = "/"))
 }

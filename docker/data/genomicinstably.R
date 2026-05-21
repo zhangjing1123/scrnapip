@@ -8,6 +8,7 @@ library(dplyr)
 library(ggplot2)
 library(getopt)
 library(clusterProfiler)
+library(Seurat)
 command = matrix(c("rds","r",1,"character",
                    "outpath","o",1,"character",
                    "anno","a",2,"character",
@@ -34,7 +35,24 @@ if(args$species=="human"){
 
 #input rds file
 seuset = readRDS(args$rds)
-sc_matrix = as.matrix(seuset@assays$RNA@counts)
+DefaultAssay(seuset) <- "RNA"
+if ("RNA" %in% names(seuset@assays) && inherits(seuset[["RNA"]], "Assay5") && exists("JoinLayers")) {
+  seuset <- tryCatch(
+    JoinLayers(seuset, assay = "RNA"),
+    error = function(e) {
+      warning("JoinLayers skipped: ", conditionMessage(e))
+      seuset
+    }
+  )
+}
+sc_counts <- tryCatch(
+  GetAssayData(seuset, assay = "RNA", layer = "counts"),
+  error = function(e) {
+    warning("GetAssayData layer='counts' failed, fallback to slot='counts': ", conditionMessage(e))
+    GetAssayData(seuset, assay = "RNA", slot = "counts")
+  }
+)
+sc_matrix = as.matrix(sc_counts)
 
 list = bitr(rownames(sc_matrix),fromType = "SYMBOL",toType = c("ENTREZID"),OrgDb = database)
 if(TRUE %in% duplicated(list$SYMBOL)){
@@ -56,14 +74,34 @@ cnv_result <- inferCNV(sc_matrix,species = args$species)
 
 cnv_result <- genomicInstabilityScore(cnv_result)
 
-cnv_result <- giLikelihood(cnv_result, recompute=FALSE, normal=1, tumor=2:3)
+cnv_result <- tryCatch(
+  giLikelihood(cnv_result, recompute=FALSE, normal=1, tumor=2:3),
+  error = function(e) {
+    warning("giLikelihood failed, using rank-based GIS fallback: ", conditionMessage(e))
+    gis <- cnv_result$gis
+    rng <- range(gis, na.rm = TRUE)
+    if (!all(is.finite(rng)) || diff(rng) == 0) {
+      cnv_result$gi_likelihood <- rep(NA_real_, length(gis))
+    } else {
+      cnv_result$gi_likelihood <- (gis - rng[1]) / diff(rng)
+    }
+    cnv_result$gi_fit <- list(lambda = c(1), fallback = TRUE, message = conditionMessage(e))
+    cnv_result
+  }
+)
 
 
 #Cells with likelihood less than 0.25 are defined as normal cells for further analysis
 cnv_norm <- inferCNV(sc_matrix, nullmat=sc_matrix[, cnv_result$gi_likelihood<0.25, drop=FALSE],species=args$species)
 
 if(!is.null(cnv_norm$gis)){
-  cnv_norm <- genomicInstabilityScore(cnv_norm, likelihood=TRUE)
+  cnv_norm <- tryCatch(
+    genomicInstabilityScore(cnv_norm, likelihood=TRUE),
+    error = function(e) {
+      warning("genomicInstabilityScore(likelihood=TRUE) failed, keeping fallback likelihood: ", conditionMessage(e))
+      cnv_result
+    }
+  )
 }else{
   cnv_norm=cnv_result
 }
@@ -75,12 +113,14 @@ par(mai=c(0.8,0.8, 0.2, 0.8))
 giDensityPlot(cnv_norm, ylim=c(0, 1.1))
 # Adding the likelihood data and second-axis
 pos <- order(cnv_norm$gis)
-lines(cnv_norm$gis[pos], cnv_norm$gi_likelihood[pos], lwd=2, col="blue")
-axis(4, seq(0, 1, length=6), seq(0, 1, 0.2), col="blue", col.axis="blue")
-axis(4, 0.5, "Relative likelihood", tick=FALSE, line=1.5, col.axis="blue")
-pos5 <- which.min((0.5-cnv_norm$gi_likelihood)^2)
-lines(c(rep(cnv_norm$gis[pos5], 2), max(cnv_norm$gis*1.05)),
-      + c(0, rep(cnv_norm$gi_likelihood[pos5], 2)), lty=3, col="blue")
+if (!is.null(cnv_norm$gi_likelihood) && any(is.finite(cnv_norm$gi_likelihood))) {
+  lines(cnv_norm$gis[pos], cnv_norm$gi_likelihood[pos], lwd=2, col="blue")
+  axis(4, seq(0, 1, length=6), seq(0, 1, 0.2), col="blue", col.axis="blue")
+  axis(4, 0.5, "Relative likelihood", tick=FALSE, line=1.5, col.axis="blue")
+  pos5 <- which.min((0.5-cnv_norm$gi_likelihood)^2)
+  lines(c(rep(cnv_norm$gis[pos5], 2), max(cnv_norm$gis*1.05)),
+        + c(0, rep(cnv_norm$gi_likelihood[pos5], 2)), lty=3, col="blue")
+}
 dev.off()
 
 nes_result = as.data.frame(cnv_norm$nes)

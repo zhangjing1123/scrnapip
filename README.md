@@ -1,6 +1,14 @@
 **Single cell biological information analysis process**
 
 
+### Current release (2026-05-21)
+
+- Docker image: `jinyuede163/scpipline-rstudio:singlecell-pipeline-20260521`
+- Docker image digest: `sha256:f6814eed9ca019752e56034d8ec556d64ea31b5e1df582ff2dcec3edc993087c`
+- Cell Ranger 10 support with configurable `create_bam` and `include_introns`.
+- Cell Ranger output staging now copies selected filtered outputs instead of creating symlinks.
+- Seurat v5 and downstream compatibility fixes from the maintained pipeline have been synced into `docker/data/`.
+
 ### Introduction
 
 The types, states, and interactions of cells in human tissues vary greatly. Single-cell transcriptome sequencing (scRNA-SEQ) is a new technique for high-throughput sequencing analysis of the transcriptome in single cell. Single-cell transcriptome sequencing can complement conventional transcriptome sequencing (mRNA-seq: Batch RNA sequencing, comparing the average expression values of genes in all cells of the cell population), revealing the expression situation of all genes in the all-cause group in single cell, including the identified tissue cell types, reflecting the cell heterogeneity between different samples and the tissue microenvironment, so that we can better understand the real state and correlation of each cell in a Bulk tissue. Presents a real and comprehensive cellular world. Currently, single-cell transcriptome sequencing is mostly used in complex multicellular systems such as tumor, developmental, neural, and immune microenvironments.
@@ -12,13 +20,13 @@ The purpose of this tool is connect the analysis of single-cell data into a comp
 ### 1. Download docker
 
 ```bash
-docker pull zhangjing12/scrnapip
+docker pull jinyuede163/scpipline-rstudio:singlecell-pipeline-20260521
 ```
 
 ### 2. Use docker
 
 ```bash
-docker run -d -p 1921:8787 -p 1882:3838 -e PASSWORD=yourpassword -e USERID=youruserid -e GROUPID=yourgroupid -v /yourdatapath:/dockerpath zhangjing12/scrnapip
+docker run -d -p 1921:8787 -p 1882:3838 -e PASSWORD=yourpassword -e USERID=youruserid -e GROUPID=yourgroupid -v /yourdatapath:/dockerpath jinyuede163/scpipline-rstudio:singlecell-pipeline-20260521
 ```
 
 The image is created based on Rocker (https://rocker-project.org/images/versioned/rstudio.html). You can use the above command to access rstudio through port 8787, which is more convenient for users to use the process. The userid and groupid can be queried through the id command. For the port number, please confirm whether the corresponding port is open.
@@ -58,11 +66,12 @@ ncode=5#The maximum number of N-bases
 dockerusr="1025:1025"#user id
 dir="/user/name"#The folder which docker mount
 ref="/user/refdata-gex-GRCh38-2020-A"#Reference genome path
-cellrangerpath="/usr/cellranger-6.1.2/cellranger"#software path of cellranger
+cellrangpath="/home/bin/cellranger-10.0.0/cellranger"#software path of Cell Ranger 10
 expectcell=10000#expect cell number
 localcores=32#Number of threads
 localmem=64#Memory size
 include_introns="false"#Whether to analyze introns
+create_bam="true"#Cell Ranger 10 BAM retention option
 
 #####[step1]:
 nFeature_RNA=[200,5000]#The cells were filtered by feature, keeping cells that feature between 200 and 5,000 
@@ -122,6 +131,8 @@ ClusterProfiler=["true","Rscript","/home/bin/clusterProfiler.R","-a true -s org.
 
 ### 2. Filtered data by fastp and cellranger
 
+Cell Ranger 10 is supported. The pipeline passes `--create-bam` and `--include-introns` to `cellranger count`. After each run, the workflow copies only the selected deliverables into the staged `outs` folder: `filtered_feature_bc_matrix/`, `filtered_feature_bc_matrix.h5`, `web_summary.html`, and `metrics_summary.csv`.
+
 This R script is used for data filtering and comparison quantitative analysis, and relevant parameters are set in the configuration file config.ini.
 
 ```bash
@@ -161,17 +172,11 @@ Cellranger results after mapping and quantitative.
 
 ```bash
 ── 02.Cellranger/
-     └── <SampleName>/                       
-              └── outs/                                 <- Cellranger analysis results 
-                    ├── analysis/                       <- Cluster by cellranger
-                    ├── raw_feature_bc_matrix/          <- Unfiltered feature-barcode matrices MEX (usually not used)
-                    ├── raw_feature_bc_matrix.h5        <- Unfiltered feature-barcode matrices HDF5
+     └── <SampleName>/
+              └── outs/                                 <- Selected Cell Ranger deliverables copied by the workflow
                     ├── filtered_feature_bc_matrix/     <- Filtered feature-barcode matrices MEX
                     ├── filtered_feature_bc_matrix.h5   <- Filtered feature-barcode matrices HDF5
-                    ├── molecule_info.h5                <- Per-molecule read information
-                    ├── metrics_summary.xls             <- Run summary information
-                    ├── possorted_genome_bam.bam        <- Bam file of single cell alignment
-                    ├── possorted_genome_bam.bam.bai    <- Bam index
+                    ├── metrics_summary.csv             <- Run summary information
                     └── web_summary.html                <- Run summary HTML
 ```
 

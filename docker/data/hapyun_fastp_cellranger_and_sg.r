@@ -67,10 +67,7 @@ isnullorf=function(x){
 
 option_list=list(make_option(c("-i","--infile"),  action="store", help='The input file.'))
 opt<-parse_args(OptionParser(usage="%prog [options] file\n",option_list=option_list))
-#opt$infile="/thinker/nfs4/public/liyq/bin/singlecell/users/liyq/pipline/singlecell/test.ini"
-#opt$infile="/thinker/nfs4/public/liyq/bin/singlecell/sgrdata/test.ini"   #shielded by zhangdx
 csc<-parseTOML(opt$infile)
-#setwd("/thinker/nfs4/public/liyq/bin/singlecell/users/liyq/pipline/singlecell/test/outfile")
 wdpath=getwd()
 if(csc$outpath$outpath %>% str_detect("^/")){
   loginfo("outfile in %s",csc$outpath$outpath)
@@ -78,9 +75,10 @@ if(csc$outpath$outpath %>% str_detect("^/")){
     outdir=paste(wdpath,outdir,sep = "/")
     loginfo("outfile in %s",outdir)
   }
-
 dir.create(outdir,recursive = T)
 dir.create(paste(outdir,"shell",sep="/"))
+setwd(outdir)
+
 #判断是否同时为真
 csc$run$fastp=isnullorf(csc$run$fastp)
 csc$run$cellrangle=isnullorf(csc$run$cellrangle)
@@ -130,6 +128,12 @@ if(csc$run$fastp){
   }
 }
 #cellrangle
+if(is.null(csc$cellrangle$create_bam)){ csc$cellrangle$create_bam <- "true" }
+if(is.null(csc$cellrangle$include_introns)){ csc$cellrangle$include_introns <- "false" }
+csc$cellrangle$create_bam <- tolower(as.character(csc$cellrangle$create_bam))
+csc$cellrangle$include_introns <- tolower(as.character(csc$cellrangle$include_introns))
+cellranger_create_bam <- csc$cellrangle$create_bam
+cellranger_include_introns <- csc$cellrangle$include_introns
 if(csc$run$cellrangle){
   dir.create(paste(outdir,"00.cellranger",sep="/"))
   
@@ -139,31 +143,29 @@ if(csc$run$cellrangle){
     dir.create(paste(outdir,"00.cellranger",xsnam,sep="/"))
     setwd(paste(outdir,"00.cellranger",xsnam,sep="/"))
     if(csc$cellrangle$usedocker){
-      commanda=sprintf('docker run --rm --user %s -v %s:%s litd/docker-cellranger bash -c "cd %s && cellranger count --id=%s --transcriptome=%s --fastqs=%s --sample=%s --expect-cells=%s --localcores=%s --localmem=%s "',
+      commanda=sprintf('docker run --rm --user %s -v %s:%s litd/docker-cellranger bash -c "cd %s && cellranger count --id=%s --transcriptome=%s --fastqs=%s --sample=%s --expect-cells=%s --localcores=%s --localmem=%s --create-bam=%s --include-introns=%s "',
                        csc$cellrangle$dockerusr,csc$cellrangle$dir,csc$cellrangle$dir,paste(outdir,"00.cellranger",xsnam,sep="/"),
                        xsnam,csc$cellrangle$ref,paste(outdir,"00.fastp",names(csc$fastp_cellrange[i]),sep = "/"),xsnam,
-                       csc$cellrangle$expectcell,csc$cellrangle$localcores,csc$cellrangle$localmem
+                       csc$cellrangle$expectcell,csc$cellrangle$localcores,csc$cellrangle$localmem,cellranger_create_bam,cellranger_include_introns
       )
       syscomd(commanda,savef = paste(outdir,"shell","01.QC.sh",sep = "/"))
       dir.create(paste(outdir,"00.cellranger",xsnam,"outs",sep="/"))
-      commanda=sprintf('cd %s && ls %s| grep -v "possorted_genome_bam.bam" |xargs -i ln -s %s/{}',
-                       paste(outdir,"00.cellranger",xsnam,"outs",sep="/"),
+      commanda=sprintf('src=%s; dest=%s; mkdir -p "${dest}"; rm -rf "${dest}/filtered_feature_bc_matrix" "${dest}/filtered_feature_bc_matrix.h5"; cp -a "${src}/filtered_feature_bc_matrix" "${dest}/"; cp -a "${src}/filtered_feature_bc_matrix.h5" "${dest}/"; cp -a "${src}/web_summary.html" "${dest}/"; cp -a "${src}/metrics_summary.csv" "${dest}/"',
                        paste(outdir,"00.cellranger",names(csc$fastp_cellrange[i]),names(csc$fastp_cellrange[i]),"outs",sep = "/"),
-                       paste(outdir,"00.cellranger",names(csc$fastp_cellrange[i]),names(csc$fastp_cellrange[i]),"outs",sep = "/")
+                       paste(outdir,"00.cellranger",xsnam,"outs",sep="/")
       )
       syscomd(commanda,savef = paste(outdir,"shell","01.QC.sh",sep = "/"))
     }else{
-      commanda=sprintf('cd %s && %s count --id=%s --transcriptome=%s --fastqs=%s --sample=%s --expect-cells=%s --localcores=%s --localmem=%s ',
+      commanda=sprintf('cd %s && %s count --id=%s --transcriptome=%s --fastqs=%s --sample=%s --expect-cells=%s --localcores=%s --localmem=%s --create-bam=%s --include-introns=%s ',
                        paste(outdir,"00.cellranger",xsnam,sep="/"),csc$cellrangle$cellrangpath,
                        xsnam,csc$cellrangle$ref,paste(outdir,"00.fastp",names(csc$fastp_cellrange[i]),sep = "/"),xsnam,
-                       csc$cellrangle$expectcell,csc$cellrangle$localcores,csc$cellrangle$localmem
+                       csc$cellrangle$expectcell,csc$cellrangle$localcores,csc$cellrangle$localmem,cellranger_create_bam,cellranger_include_introns
       )
       syscomd(commanda,savef = paste(outdir,"shell","01.QC.sh",sep = "/"))
       dir.create(paste(outdir,"00.cellranger",xsnam,"outs",sep="/"))
-      commanda=sprintf('cd %s && ls %s| grep -v "possorted_genome_bam.bam" |xargs -i ln -s %s/{}',
-                       paste(outdir,"00.cellranger",xsnam,"outs",sep="/"),
+      commanda=sprintf('src=%s; dest=%s; mkdir -p "${dest}"; rm -rf "${dest}/filtered_feature_bc_matrix" "${dest}/filtered_feature_bc_matrix.h5"; cp -a "${src}/filtered_feature_bc_matrix" "${dest}/"; cp -a "${src}/filtered_feature_bc_matrix.h5" "${dest}/"; cp -a "${src}/web_summary.html" "${dest}/"; cp -a "${src}/metrics_summary.csv" "${dest}/"',
                        paste(outdir,"00.cellranger",names(csc$fastp_cellrange[i]),names(csc$fastp_cellrange[i]),"outs",sep = "/"),
-                       paste(outdir,"00.cellranger",names(csc$fastp_cellrange[i]),names(csc$fastp_cellrange[i]),"outs",sep = "/")
+                       paste(outdir,"00.cellranger",xsnam,"outs",sep="/")
       )
       syscomd(commanda,savef = paste(outdir,"shell","01.QC.sh",sep = "/"))
       
