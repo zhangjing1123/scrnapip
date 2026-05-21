@@ -320,7 +320,7 @@ Cell trajectory plot drawed by monocle.
 
 ### 7. Loupe Browser
 
-The Cerebro export step has been replaced by Loupe Browser export. Step 6 now uses 10x Genomics `loupeR` to generate a `.cloupe` file from the Seurat object, including available metadata such as `orig.ident` and `seurat_clusters`. Before running this step, accept the 10x Genomics EULA by running `loupeR::setup()` once, or set `AUTO_ACCEPT_EULA=true` in the runtime environment.
+The Cerebro export step has been replaced by Loupe Browser export. Step 6 generates a `.cloupe` file from the Seurat object, including available metadata such as `orig.ident` and `seurat_clusters`. Open the generated `.cloupe` file with 10x Genomics Loupe Browser for interactive inspection of clusters, sample metadata, and gene expression. Loupe Browser is available from the official 10x Genomics download page: https://www.10xgenomics.com/support/software/loupe-browser/latest
 
 ```bash
 ── 07.LoupeBrowser/
@@ -430,7 +430,7 @@ The genomic Instability score density plot.
 
 ### 12. CytoTRACE2
 
-The old CytoTRACE workflow has been replaced by CytoTRACE2. Step 8 runs `cytotrace2_20260516.R`, adds CytoTRACE2 scores and potency annotations back to the Seurat object, and writes tables, RDS files, and UMAP/boxplot visualizations.
+The old CytoTRACE workflow has been replaced by CytoTRACE2. This step estimates cell differentiation potential, adds CytoTRACE2 scores and potency annotations back to the Seurat object, and writes tables, RDS files, and UMAP/boxplot visualizations.
 
 ```bash
 ── 09.CytoTRACE2/
@@ -443,6 +443,10 @@ The old CytoTRACE workflow has been replaced by CytoTRACE2. Step 8 runs `cytotra
        ├── CytoTRACE2.potency.DimPlot.pdf/png           <- UMAP grouped by CytoTRACE2 potency class
        └── CytoTRACE2.score.boxplot_cluster.pdf/png     <- CytoTRACE2 score distribution by cluster
 ```
+
+![CytoTRACE2 score UMAP](readme_files/CytoTRACE2_score_FeaturePlot.png)
+
+CytoTRACE2 score visualized on the UMAP embedding.
 
 
 
