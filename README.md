@@ -8,6 +8,8 @@
 - Cell Ranger 10 support with configurable `create_bam` and `include_introns`.
 - Cell Ranger output staging now copies selected filtered outputs instead of creating symlinks.
 - Seurat v5 and downstream compatibility fixes from the maintained pipeline have been synced into `docker/data/`.
+- `fastp` was not changed in this release; the bundled binary remains fastp 0.23.2.
+- Other synced fixes include per-sample DoubletFinder before integration, Seurat v5 layer handling for SingleR/CopyKAT/CellChat/genomicInstability, Monocle 2 compatibility patches, clusterProfiler database path handling, and a restored final Circos step.
 
 ### Introduction
 
